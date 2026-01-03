@@ -16,6 +16,7 @@ This script simplifies connecting to your VM via **Azure Bastion** using **RDP**
 
 Before using the script, ensure you have:
 - **PowerShell 5.1+** or **PowerShell 7+**
+- **AzureCLI Extnsion: az bastion**
 - **Azure CLI** (az) installed → [Install Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - An existing **Azure Bastion** resource with **Native Client Support** enabled:
   ```bash

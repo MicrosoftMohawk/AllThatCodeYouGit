@@ -282,7 +282,7 @@ $tunnelProcess = Start-Process "powershell.exe" -ArgumentList "-NoProfile", "-Ex
 
 # Wait for the tunnel to establish (check if port 55000 is listening)
 Write-Host "Waiting for tunnel to establish..." -ForegroundColor Yellow
-$maxAttempts = 30
+$maxAttempts = 60
 $attemptCount = 0
 $tunnelReady = $false
 

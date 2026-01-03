@@ -16,7 +16,7 @@ This script simplifies connecting to your VM via **Azure Bastion** using **RDP**
 
 Before using the script, ensure you have:
 - **PowerShell 5.1+** or **PowerShell 7+**
-- **AzureCLI Extnsion: az bastion**
+- **Azure CLI Extnsion: az bastion**
 - **Azure CLI** (az) installed → [Install Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - An existing **Azure Bastion** resource with **Native Client Support** enabled:
   ```bash
@@ -86,6 +86,16 @@ If the tunnel fails or closes unexpectedly:
 - The Bastion tunnel remains active in a separate PowerShell window until manually closed.  
 - On exit, temporary `.rdp` and `.ps1` helper files are safely removed.  
 - Script works best on **Windows hosts with mstsc.exe** (native RDP client).
+
+---
+
+## Change Log
+
+| Date | Version | Changes |
+|------|---------|---------|
+| 2025-12-18 | 1.0 | Initial custom initiative deployment |
+| 2026-01-02 | 1.0 | Code updates |
+| 2026-01-03 | 1.0 | Code enhancements |
 
 ---
 

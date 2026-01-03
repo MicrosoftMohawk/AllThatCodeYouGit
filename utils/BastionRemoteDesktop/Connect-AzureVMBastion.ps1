@@ -84,6 +84,50 @@ function Test-AzureLogin {
     return $false
 }
 
+# Function to check and configure preview extensions
+function Enable-PreviewExtensions {
+    Write-Host "Configuring Azure CLI to allow preview extensions..." -ForegroundColor Yellow
+    az config set extension.dynamic_install_allow_preview=true 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✓ Preview extensions enabled" -ForegroundColor Green
+        return $true
+    } else {
+        Write-Host "⚠ Warning: Could not enable preview extensions" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+# Function to check and install bastion extension
+function Test-BastionExtension {
+    Write-Host "Checking for Azure Bastion extension..." -ForegroundColor Yellow
+    $extensions = az extension list --output json 2>$null | ConvertFrom-Json
+    $bastionExt = $extensions | Where-Object { $_.name -eq "bastion" }
+    
+    if ($bastionExt) {
+        Write-Host "✓ Bastion extension is installed (Version: $($bastionExt.version))" -ForegroundColor Green
+        return $true
+    } else {
+        Write-Host "✗ Bastion extension is not installed" -ForegroundColor Red
+        Write-Host "The Azure Bastion extension is required for native client support." -ForegroundColor Yellow
+        
+        $response = Read-Host "Would you like to install it now? (Y/N)"
+        if ($response -eq 'Y' -or $response -eq 'y') {
+            Write-Host "Installing Azure Bastion extension..." -ForegroundColor Yellow
+            az extension add --name bastion --allow-preview true 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "✓ Bastion extension installed successfully" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "✗ Failed to install Bastion extension" -ForegroundColor Red
+                return $false
+            }
+        } else {
+            Write-Host "✗ Bastion extension is required to continue" -ForegroundColor Red
+            return $false
+        }
+    }
+}
+
 # Main script execution
 Write-Host "`n=== Azure Bastion RDP Connection Script ===" -ForegroundColor Cyan
 Write-Host "Target VM: $VMName" -ForegroundColor White
@@ -104,7 +148,13 @@ if (-not (Test-AzureLogin)) {
         exit 1
     }
 }
+# Step 2.5: Enable preview extensions and check for bastion extension
+Write-Host "" # Blank line for readability
+Enable-PreviewExtensions
 
+if (-not (Test-BastionExtension)) {
+    exit 1
+}
 # Step 3: Set subscription if provided
 if ($SubscriptionId) {
     Write-Host "`nSetting subscription to: $SubscriptionId" -ForegroundColor Yellow

@@ -19,12 +19,48 @@ Import-Module Az.PolicyInsights
 Write-Host "`nConnecting to Azure..." -ForegroundColor Cyan
 Connect-AzAccount
 
-# Set your subscription context
-$subscriptionId = "<EnterSubscriptionID>"
+# Get available subscriptions and prompt user to select one
+$subscriptions = Get-AzSubscription
+if ($subscriptions.Count -eq 1) {
+    $subscriptionId = $subscriptions[0].Id
+    Write-Host "Using subscription: $($subscriptions[0].Name) ($subscriptionId)" -ForegroundColor Green
+} else {
+    Write-Host "`nAvailable subscriptions:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $subscriptions.Count; $i++) {
+        Write-Host "  [$i] $($subscriptions[$i].Name) - $($subscriptions[$i].Id)"
+    }
+    $selection = Read-Host "`nEnter the number of the subscription to use"
+    $subscriptionId = $subscriptions[[int]$selection].Id
+    Write-Host "Selected: $($subscriptions[[int]$selection].Name)" -ForegroundColor Green
+}
+
 Set-AzContext -Subscription $subscriptionId
 
-# Define your management group ID (or leave blank to use subscription scope)
-$managementGroupId = "<EnterManagementGroupID>"
+# Prompt for management group ID
+Write-Host "`nDo you want to deploy to a Management Group or Subscription?" -ForegroundColor Cyan
+Write-Host "  [1] Management Group (recommended for enterprise deployments)"
+Write-Host "  [2] Subscription (simpler, single subscription scope)"
+$scopeChoice = Read-Host "Enter your choice (1 or 2)"
+
+if ($scopeChoice -eq "1") {
+    $managementGroupId = Read-Host "Enter your Management Group ID"
+    if ([string]::IsNullOrWhiteSpace($managementGroupId)) {
+        Write-Host "ERROR: Management Group ID cannot be empty" -ForegroundColor Red
+        exit 1
+    }
+    # Verify the management group exists
+    try {
+        $mg = Get-AzManagementGroup -GroupId $managementGroupId -ErrorAction Stop
+        Write-Host "Verified management group: $($mg.DisplayName)" -ForegroundColor Green
+    } catch {
+        Write-Host "ERROR: Management group '$managementGroupId' not found or you don't have access to it." -ForegroundColor Red
+        Write-Host "Please verify the Management Group ID and ensure you have appropriate permissions." -ForegroundColor Yellow
+        exit 1
+    }
+} else {
+    $managementGroupId = $null
+    Write-Host "Deploying to subscription scope: $subscriptionId" -ForegroundColor Green
+}
 #endregion
 
 #region Step 1: Export Built-in NIST 800-53 R5 Initiative (Optional - if you need to refresh)
@@ -156,12 +192,21 @@ Write-Host "  8. Review and create the assignment" -ForegroundColor Gray
 Write-Host "`n💻 METHOD 2: PowerShell" -ForegroundColor Yellow
 Write-Host "  Run the following command:" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  `$initiative = Get-AzPolicySetDefinition -Name 'NIST-800-53-Rev5-CustomHHS_v1.0' -ManagementGroupName '$managementGroupId'" -ForegroundColor Cyan
-Write-Host "  New-AzPolicyAssignment ```" -ForegroundColor Cyan
-Write-Host "    -Name 'NIST-R5-CustomHHS' ```" -ForegroundColor Cyan
-Write-Host "    -DisplayName 'NIST 800-53 R5 Custom HHS' ```" -ForegroundColor Cyan
-Write-Host "    -Scope '/providers/Microsoft.Management/managementGroups/$managementGroupId' ```" -ForegroundColor Cyan
-Write-Host "    -PolicySetDefinition `$initiative ```" -ForegroundColor Cyan
+if ($managementGroupId) {
+    Write-Host "  `$initiative = Get-AzPolicySetDefinition -Name 'NIST-800-53-Rev5-CustomHHS_v1.0' -ManagementGroupName '$managementGroupId'" -ForegroundColor Cyan
+    Write-Host "  New-AzPolicyAssignment ```" -ForegroundColor Cyan
+    Write-Host "    -Name 'NIST-R5-CustomHHS' ```" -ForegroundColor Cyan
+    Write-Host "    -DisplayName 'NIST 800-53 R5 Custom HHS' ```" -ForegroundColor Cyan
+    Write-Host "    -Scope '/providers/Microsoft.Management/managementGroups/$managementGroupId' ```" -ForegroundColor Cyan
+    Write-Host "    -PolicySetDefinition `$initiative ```" -ForegroundColor Cyan
+} else {
+    Write-Host "  `$initiative = Get-AzPolicySetDefinition -Name 'NIST-800-53-Rev5-CustomHHS_v1.0' -SubscriptionId '$subscriptionId'" -ForegroundColor Cyan
+    Write-Host "  New-AzPolicyAssignment ```" -ForegroundColor Cyan
+    Write-Host "    -Name 'NIST-R5-CustomHHS' ```" -ForegroundColor Cyan
+    Write-Host "    -DisplayName 'NIST 800-53 R5 Custom HHS' ```" -ForegroundColor Cyan
+    Write-Host "    -Scope '/subscriptions/$subscriptionId' ```" -ForegroundColor Cyan
+    Write-Host "    -PolicySetDefinition `$initiative ```" -ForegroundColor Cyan
+}
 Write-Host "    -Location 'eastus' ```" -ForegroundColor Cyan
 Write-Host "    -IdentityType 'SystemAssigned'" -ForegroundColor Cyan
 
@@ -180,7 +225,11 @@ Write-Host "`nStep 4: Next steps after assignment..." -ForegroundColor Cyan
 Write-Host "Once you assign the initiative, you can monitor compliance using:" -ForegroundColor White
 Write-Host ""
 Write-Host "  # Check compliance summary" -ForegroundColor Gray
-Write-Host "  Get-AzPolicyStateSummary -ManagementGroupName '$managementGroupId'" -ForegroundColor Cyan
+if ($managementGroupId) {
+    Write-Host "  Get-AzPolicyStateSummary -ManagementGroupName '$managementGroupId'" -ForegroundColor Cyan
+} else {
+    Write-Host "  Get-AzPolicyStateSummary -SubscriptionId '$subscriptionId'" -ForegroundColor Cyan
+}
 Write-Host ""
 Write-Host "  # Get detailed compliance for specific assignment" -ForegroundColor Gray
 Write-Host "  `$compliance = Get-AzPolicyState -PolicyAssignmentName 'NIST-R5-CustomHHS'" -ForegroundColor Cyan
@@ -194,7 +243,11 @@ Write-Host "INITIATIVE CREATION COMPLETE!" -ForegroundColor Green
 Write-Host "============================================================================" -ForegroundColor Cyan
 Write-Host "`nYour custom NIST 800-53 Rev 5 initiative is ready!\" -ForegroundColor White
 Write-Host \"`nNext Steps:\" -ForegroundColor Cyan
-Write-Host \"1. Assign the initiative to your management group or subscription (see instructions above)\" -ForegroundColor White
+if ($managementGroupId) {
+    Write-Host \"1. Assign the initiative to your management group '$managementGroupId' (see instructions above)\" -ForegroundColor White
+} else {
+    Write-Host \"1. Assign the initiative to your subscription (see instructions above)\" -ForegroundColor White
+}
 Write-Host \"2. Grant RBAC roles to the managed identity created during assignment\" -ForegroundColor White
 Write-Host \"3. Wait 10-30 minutes for initial compliance evaluation\" -ForegroundColor White
 Write-Host \"4. Monitor compliance in Azure Portal > Policy > Compliance\" -ForegroundColor White
@@ -234,7 +287,12 @@ $policyDefinitions = $jsonContent.properties.policyDefinitions | ConvertTo-Json 
 $params = @{
     Name = "NIST-800-53-Rev5-CustomHHS_v1.0"
     PolicyDefinition = $policyDefinitions
-    ManagementGroupName = "<EnterManagementGroupID>"
+}
+
+if ($managementGroupId) {
+    $params.ManagementGroupName = $managementGroupId
+} else {
+    $params.SubscriptionId = $subscriptionId
 }
 
 # Add other properties if they changed
@@ -259,7 +317,11 @@ Set-AzPolicySetDefinition @params
 # ----------------------------------------------------------------------------
 <#
 # List all policy assignments in scope
-$scope = "/providers/Microsoft.Management/managementGroups/<EnterManagementGroupID>"
+if ($managementGroupId) {
+    $scope = "/providers/Microsoft.Management/managementGroups/$managementGroupId"
+} else {
+    $scope = "/subscriptions/$subscriptionId"
+}
 Get-AzPolicyAssignment -Scope $scope
 
 # Get specific assignment
@@ -349,11 +411,12 @@ $expiringExemptions | Select-Object Name, @{Name="ExpiresOn";Expression={$_.Prop
 # Trigger on-demand compliance scan
 Start-AzPolicyComplianceScan -AsJob
 
-# Get compliance summary for management group
-Get-AzPolicyStateSummary -ManagementGroupName "<EnterManagementGroupID>"
-
-# Get compliance summary for subscription
-Get-AzPolicyStateSummary -SubscriptionId "<EnterSubscriptionID>"
+# Get compliance summary based on deployment scope
+if ($managementGroupId) {
+    Get-AzPolicyStateSummary -ManagementGroupName "$managementGroupId"
+} else {
+    Get-AzPolicyStateSummary -SubscriptionId "$subscriptionId"
+}
 
 # Get detailed compliance state for specific assignment
 $complianceDetails = Get-AzPolicyState -PolicyAssignmentName "NIST-R5-CustomHHS"

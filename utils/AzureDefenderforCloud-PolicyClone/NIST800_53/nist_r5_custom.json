@@ -1,6 +1,6 @@
 {
   "properties": {
-    "displayName": "NIST-800-53-Rev5-CustomHHS_v1.0",
+    "displayName": "NIST 800-53 Rev 5 - Custom v1.0",
     "policyType": "Custom",
     "description": "National Institute of Standards and Technology (NIST) SP 800-53 Rev. 5 provides a standardized approach for assessing, monitoring and authorizing cloud computing products and services to manage information security risk. These policies address a subset of NIST SP 800-53 R5 controls. Additional policies will be added in upcoming releases. For more information, visit https://aka.ms/nist800-53r5-initiative",
     "metadata": {

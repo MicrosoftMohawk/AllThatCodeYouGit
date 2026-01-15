@@ -36,26 +36,50 @@ if ($subscriptions.Count -eq 1) {
 
 Set-AzContext -Subscription $subscriptionId
 
-# Prompt for management group ID
+# Prompt for deployment scope
 Write-Host "`nDo you want to deploy to a Management Group or Subscription?" -ForegroundColor Cyan
 Write-Host "  [1] Management Group (recommended for enterprise deployments)"
 Write-Host "  [2] Subscription (simpler, single subscription scope)"
 $scopeChoice = Read-Host "Enter your choice (1 or 2)"
 
 if ($scopeChoice -eq "1") {
-    $managementGroupId = Read-Host "Enter your Management Group ID"
-    if ([string]::IsNullOrWhiteSpace($managementGroupId)) {
-        Write-Host "ERROR: Management Group ID cannot be empty" -ForegroundColor Red
-        exit 1
-    }
-    # Verify the management group exists
+    # Get available management groups
+    Write-Host "`nRetrieving available management groups..." -ForegroundColor Cyan
     try {
-        $mg = Get-AzManagementGroup -GroupId $managementGroupId -ErrorAction Stop
-        Write-Host "Verified management group: $($mg.DisplayName)" -ForegroundColor Green
+        $managementGroups = Get-AzManagementGroup -ErrorAction Stop
+        
+        if ($managementGroups.Count -eq 0) {
+            Write-Host "ERROR: No management groups found. You may not have access to any management groups." -ForegroundColor Red
+            Write-Host "Falling back to subscription scope deployment." -ForegroundColor Yellow
+            $managementGroupId = $null
+        } elseif ($managementGroups.Count -eq 1) {
+            $managementGroupId = $managementGroups[0].Name
+            Write-Host "Using management group: $($managementGroups[0].DisplayName) ($managementGroupId)" -ForegroundColor Green
+        } else {
+            Write-Host "`nAvailable management groups:" -ForegroundColor Cyan
+            for ($i = 0; $i -lt $managementGroups.Count; $i++) {
+                Write-Host "  [$i] $($managementGroups[$i].DisplayName) - $($managementGroups[$i].Name)"
+            }
+            $mgSelection = Read-Host "`nEnter the number of the management group to use"
+            $managementGroupId = $managementGroups[[int]$mgSelection].Name
+            Write-Host "Selected: $($managementGroups[[int]$mgSelection].DisplayName)" -ForegroundColor Green
+        }
     } catch {
-        Write-Host "ERROR: Management group '$managementGroupId' not found or you don't have access to it." -ForegroundColor Red
-        Write-Host "Please verify the Management Group ID and ensure you have appropriate permissions." -ForegroundColor Yellow
-        exit 1
+        Write-Host "ERROR: Failed to retrieve management groups: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Falling back to subscription scope deployment." -ForegroundColor Yellow
+        $managementGroupId = $null
+    }
+    
+    # If we successfully selected a management group, verify access
+    if ($managementGroupId) {
+        try {
+            $mg = Get-AzManagementGroup -GroupId $managementGroupId -Expand -ErrorAction Stop
+            Write-Host "Verified management group access: $($mg.DisplayName)" -ForegroundColor Green
+        } catch {
+            Write-Host "ERROR: Cannot access management group '$managementGroupId': $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Please ensure you have appropriate permissions." -ForegroundColor Yellow
+            exit 1
+        }
     }
 } else {
     $managementGroupId = $null
@@ -112,8 +136,30 @@ Write-Host "Found $($policyDefinitions.Count) policy definitions in the initiati
 # Convert policy definitions back to JSON string for the cmdlet
 $policyDefinitionsJson = $policyDefinitions | ConvertTo-Json -Depth 100
 
+# Prompt for custom initiative name
+Write-Host "`nCustomize Initiative Name:" -ForegroundColor Cyan
+Write-Host "Default name: NIST-800-53-Rev5-Custom_v1.0" -ForegroundColor Gray
+Write-Host "Press Enter to use default, or type a custom name" -ForegroundColor Gray
+Write-Host "Note: Name must be alphanumeric with hyphens/underscores, max 64 characters" -ForegroundColor Yellow
+$customName = Read-Host "Initiative Name"
+
+if ([string]::IsNullOrWhiteSpace($customName)) {
+    $initiativeName = "NIST-800-53-Rev5-Custom_v1.0"
+    Write-Host "Using default name: $initiativeName" -ForegroundColor Green
+} else {
+    # Validate the name (alphanumeric, hyphens, underscores only, max 64 chars)
+    if ($customName -match '^[a-zA-Z0-9_-]{1,64}$') {
+        $initiativeName = $customName
+        Write-Host "Using custom name: $initiativeName" -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: Invalid name format. Using default name instead." -ForegroundColor Yellow
+        Write-Host "Name must contain only letters, numbers, hyphens, and underscores (max 64 chars)" -ForegroundColor Yellow
+        $initiativeName = "NIST-800-53-Rev5-Custom_v1.0"
+        Write-Host "Using default name: $initiativeName" -ForegroundColor Green
+    }
+}
+
 # Define custom initiative parameters
-$initiativeName = "NIST-800-53-Rev5-CustomHHS_v1.0"
 $displayName = $properties.displayName
 $description = $properties.description
 $metadata = $properties.metadata | ConvertTo-Json -Depth 10
@@ -182,7 +228,7 @@ Write-Host "To apply it to your resources, assign it manually using one of these
 Write-Host "`n📋 METHOD 1: Azure Portal" -ForegroundColor Yellow
 Write-Host "  1. Navigate to: Azure Portal > Policy > Definitions" -ForegroundColor Gray
 Write-Host "  2. Set 'Type' filter to 'Custom'" -ForegroundColor Gray
-Write-Host "  3. Find 'NIST-800-53-Rev5-CustomHHS_v1.0'" -ForegroundColor Gray
+Write-Host "  3. Find '$initiativeName'" -ForegroundColor Gray
 Write-Host "  4. Click the initiative, then click 'Assign'" -ForegroundColor Gray
 Write-Host "  5. Select scope (Management Group or Subscription)" -ForegroundColor Gray
 Write-Host "  6. Configure parameters if needed" -ForegroundColor Gray
@@ -193,17 +239,17 @@ Write-Host "`n💻 METHOD 2: PowerShell" -ForegroundColor Yellow
 Write-Host "  Run the following command:" -ForegroundColor Gray
 Write-Host ""
 if ($managementGroupId) {
-    Write-Host "  `$initiative = Get-AzPolicySetDefinition -Name 'NIST-800-53-Rev5-CustomHHS_v1.0' -ManagementGroupName '$managementGroupId'" -ForegroundColor Cyan
+    Write-Host "  `$initiative = Get-AzPolicySetDefinition -Name '$initiativeName' -ManagementGroupName '$managementGroupId'" -ForegroundColor Cyan
     Write-Host "  New-AzPolicyAssignment ```" -ForegroundColor Cyan
     Write-Host "    -Name 'NIST-R5-CustomHHS' ```" -ForegroundColor Cyan
-    Write-Host "    -DisplayName 'NIST 800-53 R5 Custom HHS' ```" -ForegroundColor Cyan
+    Write-Host "    -DisplayName '$displayName' ```" -ForegroundColor Cyan
     Write-Host "    -Scope '/providers/Microsoft.Management/managementGroups/$managementGroupId' ```" -ForegroundColor Cyan
     Write-Host "    -PolicySetDefinition `$initiative ```" -ForegroundColor Cyan
 } else {
-    Write-Host "  `$initiative = Get-AzPolicySetDefinition -Name 'NIST-800-53-Rev5-CustomHHS_v1.0' -SubscriptionId '$subscriptionId'" -ForegroundColor Cyan
+    Write-Host "  `$initiative = Get-AzPolicySetDefinition -Name '$initiativeName' -SubscriptionId '$subscriptionId'" -ForegroundColor Cyan
     Write-Host "  New-AzPolicyAssignment ```" -ForegroundColor Cyan
     Write-Host "    -Name 'NIST-R5-CustomHHS' ```" -ForegroundColor Cyan
-    Write-Host "    -DisplayName 'NIST 800-53 R5 Custom HHS' ```" -ForegroundColor Cyan
+    Write-Host "    -DisplayName '$displayName' ```" -ForegroundColor Cyan
     Write-Host "    -Scope '/subscriptions/$subscriptionId' ```" -ForegroundColor Cyan
     Write-Host "    -PolicySetDefinition `$initiative ```" -ForegroundColor Cyan
 }
@@ -285,7 +331,7 @@ $jsonContent = Get-Content .\nist_r5_custom.json -Raw | ConvertFrom-Json
 $policyDefinitions = $jsonContent.properties.policyDefinitions | ConvertTo-Json -Depth 100
 
 $params = @{
-    Name = "NIST-800-53-Rev5-CustomHHS_v1.0"
+    Name = "<YourInitiativeName>"  # Replace with your actual initiative name
     PolicyDefinition = $policyDefinitions
 }
 

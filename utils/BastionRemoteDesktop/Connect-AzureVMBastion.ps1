@@ -6,24 +6,51 @@
     This script connects to an Azure VM through Azure Bastion using the native RDP client.
     Requires Azure CLI to be installed and Azure Bastion to have native client support enabled.
 
+    When run without parameters, the script enters interactive mode and presents numbered
+    selection menus to discover and choose Azure subscriptions, Bastion hosts, resource groups,
+    and virtual machines. When parameters are provided on the command line, those prompts are
+    skipped (full backward compatibility).
+
 .PARAMETER VMName
-    The name of the Azure Virtual Machine to connect to
+    (Optional) The name of the Azure Virtual Machine to connect to.
+    If omitted, the script lists available VMs and prompts for selection.
 
 .PARAMETER ResourceGroupName
-    The name of the resource group containing the VM
+    (Optional) The name of the resource group containing the VM.
+    If omitted, the script lists available resource groups and prompts for selection.
 
 .PARAMETER BastionName
-    The name of the Azure Bastion resource
+    (Optional) The name of the Azure Bastion resource.
+    If omitted, the script lists available Bastion hosts across the subscription and prompts for selection.
+
+.PARAMETER BastionResourceGroupName
+    (Optional) The resource group containing the Azure Bastion resource, when it differs from
+    the VM resource group. If omitted, defaults to the VM resource group (ResourceGroupName).
+    Automatically populated when using interactive Bastion selection.
 
 .PARAMETER SubscriptionId
-    (Optional) The Azure subscription ID. If not provided, uses the current subscription.
+    (Optional) The Azure subscription ID. If not provided, the script offers an interactive
+    subscription picker or uses the current active subscription.
 
 .PARAMETER UseAllMonitors
     (Optional) If specified, attempts to use all monitors. Note: The az network bastion rdp command
     uses default RDP settings and may not honor this parameter. Single monitor is typical default.
 
 .EXAMPLE
+    .\Connect-AzureVMBastion.ps1
+    # Fully interactive mode — prompts for subscription, Bastion, resource group, and VM.
+
+.EXAMPLE
     .\Connect-AzureVMBastion.ps1 -VMName "myVM" -ResourceGroupName "myRG" -BastionName "myBastion"
+    # Direct connection with all parameters specified (no prompts).
+
+.EXAMPLE
+    .\Connect-AzureVMBastion.ps1 -ResourceGroupName "myRG"
+    # Partial interactive mode — prompts for subscription, Bastion, and VM only.
+
+.EXAMPLE
+    .\Connect-AzureVMBastion.ps1 -VMName "myVM" -ResourceGroupName "myRG" -BastionName "myBastion" -BastionResourceGroupName "myNetworkRG"
+    # Bastion is in a different resource group than the VM.
 
 .EXAMPLE
     .\Connect-AzureVMBastion.ps1 -VMName "myVM" -ResourceGroupName "myRG" -BastionName "myBastion" -SubscriptionId "00000000-0000-0000-0000-000000000000"
@@ -34,14 +61,17 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$VMName,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$ResourceGroupName,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$BastionName,
+
+    [Parameter(Mandatory = $false)]
+    [string]$BastionResourceGroupName,
 
     [Parameter(Mandatory = $false)]
     [string]$SubscriptionId,
@@ -128,11 +158,158 @@ function Test-BastionExtension {
     }
 }
 
+# Function to display a numbered selection menu and return the selected index (0-based)
+function Show-SelectionMenu {
+    param(
+        [string]$Title,
+        [string[]]$Items
+    )
+
+    if (-not $Items -or $Items.Count -eq 0) {
+        Write-Host "✗ No items found for: $Title" -ForegroundColor Red
+        return $null
+    }
+
+    Write-Host "`n--- $Title ---" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Items.Count; $i++) {
+        Write-Host "  [$($i + 1)] $($Items[$i])" -ForegroundColor White
+    }
+
+    while ($true) {
+        $input = Read-Host "`nEnter selection (1-$($Items.Count))"
+        $index = 0
+        if ([int]::TryParse($input, [ref]$index) -and $index -ge 1 -and $index -le $Items.Count) {
+            return ($index - 1)
+        }
+        Write-Host "⚠ Invalid selection. Please enter a number between 1 and $($Items.Count)." -ForegroundColor Yellow
+    }
+}
+
+# Function to interactively select an Azure subscription
+function Select-Subscription {
+    Write-Host "`nRetrieving available subscriptions..." -ForegroundColor Yellow
+    $subscriptions = az account list --query "[].{name:name, id:id, isDefault:isDefault}" -o json 2>$null | ConvertFrom-Json
+
+    if (-not $subscriptions -or $subscriptions.Count -eq 0) {
+        Write-Host "✗ No subscriptions found. Ensure you are logged in." -ForegroundColor Red
+        return $null
+    }
+
+    $displayItems = @()
+    foreach ($sub in $subscriptions) {
+        $marker = if ($sub.isDefault) { " (current)" } else { "" }
+        $displayItems += "$($sub.name) [$($sub.id)]$marker"
+    }
+
+    $selectedIndex = Show-SelectionMenu -Title "Select Azure Subscription" -Items $displayItems
+    if ($null -eq $selectedIndex) { return $null }
+
+    $selected = $subscriptions[$selectedIndex]
+    Write-Host "✓ Selected subscription: $($selected.name)" -ForegroundColor Green
+
+    az account set --subscription $selected.id 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "✗ Failed to set subscription" -ForegroundColor Red
+        return $null
+    }
+
+    return $selected.id
+}
+
+# Function to interactively select a Bastion host (searches across all RGs in the subscription)
+function Select-BastionHost {
+    Write-Host "`nRetrieving available Bastion hosts..." -ForegroundColor Yellow
+    $bastions = az network bastion list --query "[].{name:name, resourceGroup:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+
+    if (-not $bastions -or $bastions.Count -eq 0) {
+        Write-Host "✗ No Bastion hosts found in the current subscription." -ForegroundColor Red
+        Write-Host "  Ensure a Bastion resource exists and you have read permissions." -ForegroundColor Gray
+        return $null
+    }
+
+    if ($bastions.Count -eq 1) {
+        Write-Host "✓ Auto-selected the only Bastion host: $($bastions[0].name) (RG: $($bastions[0].resourceGroup))" -ForegroundColor Green
+        return $bastions[0]
+    }
+
+    $displayItems = @()
+    foreach ($b in $bastions) {
+        $displayItems += "$($b.name)  (Resource Group: $($b.resourceGroup))"
+    }
+
+    $selectedIndex = Show-SelectionMenu -Title "Select Bastion Host" -Items $displayItems
+    if ($null -eq $selectedIndex) { return $null }
+
+    $selected = $bastions[$selectedIndex]
+    Write-Host "✓ Selected Bastion: $($selected.name) (RG: $($selected.resourceGroup))" -ForegroundColor Green
+    return $selected
+}
+
+# Function to interactively select a resource group
+function Select-ResourceGroup {
+    Write-Host "`nRetrieving available resource groups..." -ForegroundColor Yellow
+    $resourceGroups = az group list --query "[].name" -o json 2>$null | ConvertFrom-Json
+
+    if (-not $resourceGroups -or $resourceGroups.Count -eq 0) {
+        Write-Host "✗ No resource groups found in the current subscription." -ForegroundColor Red
+        return $null
+    }
+
+    $sorted = $resourceGroups | Sort-Object
+
+    $selectedIndex = Show-SelectionMenu -Title "Select VM Resource Group" -Items $sorted
+    if ($null -eq $selectedIndex) { return $null }
+
+    $selected = $sorted[$selectedIndex]
+    Write-Host "✓ Selected resource group: $selected" -ForegroundColor Green
+    return $selected
+}
+
+# Function to interactively select a virtual machine
+function Select-VirtualMachine {
+    param(
+        [string]$RGName
+    )
+
+    if ($RGName) {
+        Write-Host "`nRetrieving VMs in resource group: $RGName..." -ForegroundColor Yellow
+        $vms = az vm list --resource-group $RGName --query "[].name" -o json 2>$null | ConvertFrom-Json
+    } else {
+        Write-Host "`nRetrieving VMs across the subscription..." -ForegroundColor Yellow
+        $vms = az vm list --query "[].{name:name, resourceGroup:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+    }
+
+    if (-not $vms -or $vms.Count -eq 0) {
+        $scope = if ($RGName) { "resource group '$RGName'" } else { "the current subscription" }
+        Write-Host "✗ No virtual machines found in $scope." -ForegroundColor Red
+        return $null
+    }
+
+    if ($RGName) {
+        $sorted = $vms | Sort-Object
+        $selectedIndex = Show-SelectionMenu -Title "Select Virtual Machine" -Items $sorted
+        if ($null -eq $selectedIndex) { return $null }
+
+        $selected = $sorted[$selectedIndex]
+        Write-Host "✓ Selected VM: $selected" -ForegroundColor Green
+        return @{ Name = $selected; ResourceGroup = $RGName }
+    } else {
+        $displayItems = @()
+        foreach ($vm in $vms) {
+            $displayItems += "$($vm.name)  (Resource Group: $($vm.resourceGroup))"
+        }
+
+        $selectedIndex = Show-SelectionMenu -Title "Select Virtual Machine" -Items $displayItems
+        if ($null -eq $selectedIndex) { return $null }
+
+        $selected = $vms[$selectedIndex]
+        Write-Host "✓ Selected VM: $($selected.name) (RG: $($selected.resourceGroup))" -ForegroundColor Green
+        return @{ Name = $selected.name; ResourceGroup = $selected.resourceGroup }
+    }
+}
+
 # Main script execution
 Write-Host "`n=== Azure Bastion RDP Connection Script ===" -ForegroundColor Cyan
-Write-Host "Target VM: $VMName" -ForegroundColor White
-Write-Host "Resource Group: $ResourceGroupName" -ForegroundColor White
-Write-Host "Bastion: $BastionName`n" -ForegroundColor White
 
 # Step 1: Check if Azure CLI is installed
 if (-not (Test-AzureCLI)) {
@@ -155,7 +332,8 @@ Enable-PreviewExtensions
 if (-not (Test-BastionExtension)) {
     exit 1
 }
-# Step 3: Set subscription if provided
+
+# Step 3: Subscription selection
 if ($SubscriptionId) {
     Write-Host "`nSetting subscription to: $SubscriptionId" -ForegroundColor Yellow
     az account set --subscription $SubscriptionId
@@ -163,9 +341,54 @@ if ($SubscriptionId) {
         Write-Host "✗ Failed to set subscription" -ForegroundColor Red
         exit 1
     }
+} else {
+    $selectedSubId = Select-Subscription
+    if (-not $selectedSubId) {
+        Write-Host "✗ Subscription selection is required to continue." -ForegroundColor Red
+        exit 1
+    }
+    $SubscriptionId = $selectedSubId
 }
 
-# Step 4: Get VM Resource ID
+# Step 4: Bastion host selection
+if (-not $BastionName) {
+    $bastionSelection = Select-BastionHost
+    if (-not $bastionSelection) {
+        exit 1
+    }
+    $BastionName = $bastionSelection.name
+    $BastionResourceGroupName = $bastionSelection.resourceGroup
+}
+
+# Step 5: VM Resource Group selection
+if (-not $ResourceGroupName) {
+    $ResourceGroupName = Select-ResourceGroup
+    if (-not $ResourceGroupName) {
+        exit 1
+    }
+}
+
+# Step 6: VM selection
+if (-not $VMName) {
+    $vmSelection = Select-VirtualMachine -RGName $ResourceGroupName
+    if (-not $vmSelection) {
+        exit 1
+    }
+    $VMName = $vmSelection.Name
+    $ResourceGroupName = $vmSelection.ResourceGroup
+}
+
+# Resolve the Bastion resource group (may differ from VM resource group)
+$bastionRG = if ($BastionResourceGroupName) { $BastionResourceGroupName } else { $ResourceGroupName }
+
+# Display resolved connection summary
+Write-Host "`n=== Connection Summary ===" -ForegroundColor Cyan
+Write-Host "Target VM:         $VMName" -ForegroundColor White
+Write-Host "VM Resource Group:  $ResourceGroupName" -ForegroundColor White
+Write-Host "Bastion:           $BastionName" -ForegroundColor White
+Write-Host "Bastion RG:        $bastionRG`n" -ForegroundColor White
+
+# Step 7: Get VM Resource ID
 Write-Host "`nRetrieving VM information..." -ForegroundColor Yellow
 $vmResourceId = az vm show --name $VMName --resource-group $ResourceGroupName --query "id" -o tsv 2>$null
 
@@ -176,27 +399,27 @@ if (-not $vmResourceId) {
 
 Write-Host "✓ VM found: $vmResourceId" -ForegroundColor Green
 
-# Step 5: Get Bastion Resource ID
+# Step 8: Get Bastion Resource ID
 Write-Host "`nRetrieving Bastion information..." -ForegroundColor Yellow
-$bastionResourceId = az network bastion show --name $BastionName --resource-group $ResourceGroupName --query "id" -o tsv 2>$null
+$bastionResourceId = az network bastion show --name $BastionName --resource-group $bastionRG --query "id" -o tsv 2>$null
 
 if (-not $bastionResourceId) {
-    Write-Host "✗ Failed to find Bastion: $BastionName in resource group: $ResourceGroupName" -ForegroundColor Red
+    Write-Host "✗ Failed to find Bastion: $BastionName in resource group: $bastionRG" -ForegroundColor Red
     exit 1
 }
 
 Write-Host "✓ Bastion found: $bastionResourceId" -ForegroundColor Green
 
-# Step 6: Verify Bastion has native client support enabled
+# Step 9: Verify Bastion has native client support enabled
 Write-Host "`nVerifying Bastion configuration..." -ForegroundColor Yellow
-$bastionConfig = az network bastion show --name $BastionName --resource-group $ResourceGroupName --query "{enableTunneling:enableTunneling}" -o json 2>$null | ConvertFrom-Json
+$bastionConfig = az network bastion show --name $BastionName --resource-group $bastionRG --query "{enableTunneling:enableTunneling}" -o json 2>$null | ConvertFrom-Json
 
 if ($bastionConfig.enableTunneling -ne $true) {
     Write-Host "⚠ Warning: Native client support (tunneling) may not be enabled on this Bastion" -ForegroundColor Yellow
-    Write-Host "  To enable it, run: az network bastion update --name $BastionName --resource-group $ResourceGroupName --enable-tunneling true" -ForegroundColor Yellow
+    Write-Host "  To enable it, run: az network bastion update --name $BastionName --resource-group $bastionRG --enable-tunneling true" -ForegroundColor Yellow
 }
 
-# Step 7: Connect to VM via RDP through Bastion
+# Step 10: Connect to VM via RDP through Bastion
 Write-Host "`n=== Initiating RDP Connection ===" -ForegroundColor Cyan
 Write-Host "Connecting to VM via Azure Bastion native client..." -ForegroundColor Yellow
 
@@ -270,7 +493,7 @@ $tunnelScript = @"
 Write-Host 'Bastion tunnel starting...' -ForegroundColor Cyan
 az network bastion tunnel ``
     --name '$BastionName' ``
-    --resource-group '$ResourceGroupName' ``
+    --resource-group '$bastionRG' ``
     --target-resource-id '$vmResourceId' ``
     --resource-port 3389 ``
     --port 55000

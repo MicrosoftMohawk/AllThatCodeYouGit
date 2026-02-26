@@ -285,7 +285,64 @@ resource nsgSite2 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
 
 // ---------------------------------------------------------------------------
 // Virtual Network with all Subnets
+// GatewaySubnet MUST be included inline so ARM doesn't try to delete it
+// on redeployment (it cannot be removed while VPN Gateway is attached).
 // ---------------------------------------------------------------------------
+
+var baseSubnets = [
+  {
+    name: 'AzureBastionSubnet'
+    properties: {
+      addressPrefix: snetBastionPrefix
+    }
+  }
+  {
+    name: 'snet-ad'
+    properties: {
+      addressPrefix: snetAdPrefix
+      networkSecurityGroup: {
+        id: nsgAd.id
+      }
+    }
+  }
+  {
+    name: 'snet-main'
+    properties: {
+      addressPrefix: snetMainPrefix
+      networkSecurityGroup: {
+        id: nsgMain.id
+      }
+    }
+  }
+  {
+    name: 'snet-site1'
+    properties: {
+      addressPrefix: snetSite1Prefix
+      networkSecurityGroup: {
+        id: nsgSite1.id
+      }
+    }
+  }
+  {
+    name: 'snet-site2'
+    properties: {
+      addressPrefix: snetSite2Prefix
+      networkSecurityGroup: {
+        id: nsgSite2.id
+      }
+    }
+  }
+]
+
+var gatewaySubnetEntry = !empty(snetGatewayPrefix) ? [
+  {
+    name: 'GatewaySubnet'
+    properties: {
+      addressPrefix: snetGatewayPrefix
+    }
+  }
+] : []
+
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   name: vnetName
   location: location
@@ -299,62 +356,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
     dhcpOptions: !empty(dnsServers) ? {
       dnsServers: dnsServers
     } : null
-    subnets: [
-      {
-        name: 'AzureBastionSubnet'
-        properties: {
-          addressPrefix: snetBastionPrefix
-        }
-      }
-      {
-        name: 'snet-ad'
-        properties: {
-          addressPrefix: snetAdPrefix
-          networkSecurityGroup: {
-            id: nsgAd.id
-          }
-        }
-      }
-      {
-        name: 'snet-main'
-        properties: {
-          addressPrefix: snetMainPrefix
-          networkSecurityGroup: {
-            id: nsgMain.id
-          }
-        }
-      }
-      {
-        name: 'snet-site1'
-        properties: {
-          addressPrefix: snetSite1Prefix
-          networkSecurityGroup: {
-            id: nsgSite1.id
-          }
-        }
-      }
-      {
-        name: 'snet-site2'
-        properties: {
-          addressPrefix: snetSite2Prefix
-          networkSecurityGroup: {
-            id: nsgSite2.id
-          }
-        }
-      }
-    ]
-  }
-}
-
-// ---------------------------------------------------------------------------
-// GatewaySubnet — added after VNet creation to avoid index shifts
-// (Azure requires the exact name 'GatewaySubnet'; no NSG allowed)
-// ---------------------------------------------------------------------------
-resource gatewaySubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' = if (!empty(snetGatewayPrefix)) {
-  parent: vnet
-  name: 'GatewaySubnet'
-  properties: {
-    addressPrefix: snetGatewayPrefix
+    subnets: concat(baseSubnets, gatewaySubnetEntry)
   }
 }
 
@@ -368,4 +370,4 @@ output snetAdId string = vnet.properties.subnets[1].id
 output snetMainId string = vnet.properties.subnets[2].id
 output snetSite1Id string = vnet.properties.subnets[3].id
 output snetSite2Id string = vnet.properties.subnets[4].id
-output snetGatewayId string = !empty(snetGatewayPrefix) ? gatewaySubnet.id : ''
+output snetGatewayId string = !empty(snetGatewayPrefix) ? vnet.properties.subnets[5].id : ''

@@ -52,8 +52,11 @@ param kvPrincipalType string = 'User'
 @description('VM size for Domain Controllers')
 param sizeDC string = 'Standard_D2s_v5'
 
-@description('VM size for CAS and Primary site servers')
+@description('VM size for MCM site servers (when SQL is separate)')
 param sizeApp string = 'Standard_D4s_v5'
+
+@description('VM size for MCM site servers when SQL is colocated (needs more RAM/CPU)')
+param sizeAppColocated string = 'Standard_D8s_v5'
 
 @description('VM size for standalone SQL VMs (CAS, PrimA, PrimB)')
 param sizeSQL string = 'Standard_D4s_v5'
@@ -105,6 +108,56 @@ param aoagListenerIp string = '10.0.40.10'
 
 // --- OS Image ----------------------------------------------------------------
 
+// --- Colocated SQL+MCM option -------------------------------------------------
+
+@description('When true, SQL is installed on the MCM server (no separate SQL VMs for CAS/PrimA/PrimB). Site 2 AOAG nodes are always deployed.')
+param colocateSql bool = false
+
+@description('When true, SQL and MCM VMs are automatically domain-joined after deployment using the svc-domjoin service account.')
+param joinDomain bool = true
+
+// --- VM Naming ---------------------------------------------------------------
+// Defaults follow baseName-suffix convention (max 15 chars for Windows).
+// Override via parameters to use your own naming convention.
+
+@description('VM name: SQL for CAS site (ignored when colocateSql=true)')
+@maxLength(15)
+param vmNameSqlCas string = '${baseName}-sqcs'
+
+@description('VM name: SQL for Primary A (ignored when colocateSql=true)')
+@maxLength(15)
+param vmNameSqlPrimA string = '${baseName}-sqpa'
+
+@description('VM name: SQL for Primary B (ignored when colocateSql=true)')
+@maxLength(15)
+param vmNameSqlPrimB string = '${baseName}-sqpb'
+
+@description('VM name: AOAG SQL node 1 at Site 2')
+@maxLength(15)
+param vmNameSqlAoag1 string = '${baseName}-sqc1'
+
+@description('VM name: AOAG SQL node 2 at Site 2')
+@maxLength(15)
+param vmNameSqlAoag2 string = '${baseName}-sqc2'
+
+@description('VM name: CAS (Central Administration Site)')
+@maxLength(15)
+param vmNameCas string = '${baseName}-cas'
+
+@description('VM name: Child Primary A (Main site)')
+@maxLength(15)
+param vmNamePrimA string = '${baseName}-prma'
+
+@description('VM name: Child Primary B (Site 1)')
+@maxLength(15)
+param vmNamePrimB string = '${baseName}-prmb'
+
+@description('VM name: Child Primary C (Site 2)')
+@maxLength(15)
+param vmNamePrimC string = '${baseName}-prmc'
+
+// --- OS Image ----------------------------------------------------------------
+
 @description('Windows Server image publisher')
 param imagePublisher string = 'MicrosoftWindowsServer'
 
@@ -140,18 +193,19 @@ var commonTags = {
 // Derived AD values
 var netbiosName = toUpper(split(domainName, '.')[0])
 
-// VM names (max 15 chars for Windows computer name — baseName max 10 + dash + 4 suffix)
+// Build the AD distinguished name (e.g., 'army.ic.lab' → 'DC=army,DC=ic,DC=lab')
+var domainParts = split(domainName, '.')
+var domainDN = join(map(domainParts, part => 'DC=${part}'), ',')
+
+// VM names — DCs are always baseName + suffix; MCM/SQL names come from parameters
 var dc01Name = '${baseName}-dc01'
 var dc02Name = '${baseName}-dc02'
-var sqlCasName = '${baseName}-sqcs'
-var sqlPrimaName = '${baseName}-sqpa'
-var sqlPrimbName = '${baseName}-sqpb'
-var sqlPrimc01Name = '${baseName}-sqc1'
-var sqlPrimc02Name = '${baseName}-sqc2'
-var casName = '${baseName}-cas'
-var primaName = '${baseName}-prma'
-var primbName = '${baseName}-prmb'
-var primcName = '${baseName}-prmc'
+
+// Effective MCM VM size — upsize when SQL is colocated
+var effectiveAppSize = colocateSql ? sizeAppColocated : sizeApp
+
+// Domain join credential — uses svc-domjoin created by configureAD.bicep
+var domainJoinUser = 'svc-domjoin@${domainName}'
 
 // =============================================================================
 // Resource Groups (all tiers — created upfront for idempotency)
@@ -389,11 +443,13 @@ module ilb 'modules/compute/loadBalancer.bicep' = if (deploymentTier >= 2) {
 
 // --- SQL VM: CAS (Main Site) -------------------------------------------------
 
-module sqlCas 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
+// --- SQL VM: CAS (Main Site) — skipped when colocateSql is true --------------
+
+module sqlCas 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateSql) {
   name: 'deploy-sql-cas'
   scope: rgMainSite
   params: {
-    vmName: sqlCasName
+    vmName: vmNameSqlCas
     location: location
     vmSize: sizeSQL
     subnetId: vnet.outputs.snetMainId
@@ -409,13 +465,13 @@ module sqlCas 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
   }
 }
 
-// --- SQL VM: Primary A (Main Site) -------------------------------------------
+// --- SQL VM: Primary A (Main Site) — skipped when colocateSql is true --------
 
-module sqlPrima 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
+module sqlPrima 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateSql) {
   name: 'deploy-sql-prima'
   scope: rgMainSite
   params: {
-    vmName: sqlPrimaName
+    vmName: vmNameSqlPrimA
     location: location
     vmSize: sizeSQL
     subnetId: vnet.outputs.snetMainId
@@ -431,13 +487,13 @@ module sqlPrima 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
   }
 }
 
-// --- SQL VM: Primary B (Site 1) ----------------------------------------------
+// --- SQL VM: Primary B (Site 1) — skipped when colocateSql is true -----------
 
-module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
+module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateSql) {
   name: 'deploy-sql-primb'
   scope: rgSite1Res
   params: {
-    vmName: sqlPrimbName
+    vmName: vmNameSqlPrimB
     location: location
     vmSize: sizeSQL
     subnetId: vnet.outputs.snetSite1Id
@@ -453,13 +509,13 @@ module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
   }
 }
 
-// --- SQL VM: Primary C — AOAG Node 1 (Site 2) --------------------------------
+// --- SQL VM: Primary C — AOAG Node 1 (Site 2) — always deployed -------------
 
 module sqlPrimc01 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
   name: 'deploy-sql-primc01'
   scope: rgSite2Res
   params: {
-    vmName: sqlPrimc01Name
+    vmName: vmNameSqlAoag1
     location: location
     vmSize: sizeSQLAoag
     subnetId: vnet.outputs.snetSite2Id
@@ -477,13 +533,13 @@ module sqlPrimc01 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
   }
 }
 
-// --- SQL VM: Primary C — AOAG Node 2 (Site 2) --------------------------------
+// --- SQL VM: Primary C — AOAG Node 2 (Site 2) — always deployed -------------
 
 module sqlPrimc02 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
   name: 'deploy-sql-primc02'
   scope: rgSite2Res
   params: {
-    vmName: sqlPrimc02Name
+    vmName: vmNameSqlAoag2
     location: location
     vmSize: sizeSQLAoag
     subnetId: vnet.outputs.snetSite2Id
@@ -501,8 +557,86 @@ module sqlPrimc02 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
   }
 }
 
+// --- Domain Join: SQL VMs (Tier 2) ------------------------------------------
+
+module djSqlCas 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && !colocateSql && joinDomain) {
+  name: 'deploy-dj-sql-cas'
+  scope: rgMainSite
+  dependsOn: [sqlCas, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameSqlCas
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=SQL Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+module djSqlPrimA 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && !colocateSql && joinDomain) {
+  name: 'deploy-dj-sql-prima'
+  scope: rgMainSite
+  dependsOn: [sqlPrima, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameSqlPrimA
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=SQL Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+module djSqlPrimB 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && !colocateSql && joinDomain) {
+  name: 'deploy-dj-sql-primb'
+  scope: rgSite1Res
+  dependsOn: [sqlPrimb, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameSqlPrimB
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=SQL Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+module djSqlAoag1 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && joinDomain) {
+  name: 'deploy-dj-sql-aoag1'
+  scope: rgSite2Res
+  dependsOn: [sqlPrimc01, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameSqlAoag1
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=SQL Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+module djSqlAoag2 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && joinDomain) {
+  name: 'deploy-dj-sql-aoag2'
+  scope: rgSite2Res
+  dependsOn: [sqlPrimc02, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameSqlAoag2
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=SQL Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
 // =============================================================================
 // TIER 3: Application VMs (CAS + 3 Child Primaries)
+// When colocateSql=true, MCM VMs get data disks and are upsized for SQL.
 // =============================================================================
 
 // --- CAS Server (Main Site) --------------------------------------------------
@@ -511,16 +645,19 @@ module casVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
   name: 'deploy-cas'
   scope: rgMainSite
   params: {
-    vmName: casName
+    vmName: vmNameCas
     location: location
-    vmSize: sizeApp
+    vmSize: effectiveAppSize
     subnetId: vnet.outputs.snetMainId
     adminUsername: adminUsername
     adminPassword: adminPassword
     imagePublisher: imagePublisher
     imageOffer: imageOffer
     imageSku: imageSku
-    tags: union(commonTags, { role: 'cas', site: 'main' })
+    dataDiskCount: colocateSql ? 2 : 0
+    dataDiskSizeGb: colocateSql ? 128 : 0
+    dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    tags: union(commonTags, { role: colocateSql ? 'cas-sql' : 'cas', site: 'main' })
   }
 }
 
@@ -530,16 +667,19 @@ module primaVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
   name: 'deploy-prima'
   scope: rgMainSite
   params: {
-    vmName: primaName
+    vmName: vmNamePrimA
     location: location
-    vmSize: sizeApp
+    vmSize: effectiveAppSize
     subnetId: vnet.outputs.snetMainId
     adminUsername: adminUsername
     adminPassword: adminPassword
     imagePublisher: imagePublisher
     imageOffer: imageOffer
     imageSku: imageSku
-    tags: union(commonTags, { role: 'child-primary', site: 'main' })
+    dataDiskCount: colocateSql ? 2 : 0
+    dataDiskSizeGb: colocateSql ? 128 : 0
+    dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'main' })
   }
 }
 
@@ -549,16 +689,19 @@ module primbVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
   name: 'deploy-primb'
   scope: rgSite1Res
   params: {
-    vmName: primbName
+    vmName: vmNamePrimB
     location: location
-    vmSize: sizeApp
+    vmSize: effectiveAppSize
     subnetId: vnet.outputs.snetSite1Id
     adminUsername: adminUsername
     adminPassword: adminPassword
     imagePublisher: imagePublisher
     imageOffer: imageOffer
     imageSku: imageSku
-    tags: union(commonTags, { role: 'child-primary', site: 'site1' })
+    dataDiskCount: colocateSql ? 2 : 0
+    dataDiskSizeGb: colocateSql ? 128 : 0
+    dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'site1' })
   }
 }
 
@@ -568,9 +711,9 @@ module primcVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
   name: 'deploy-primc'
   scope: rgSite2Res
   params: {
-    vmName: primcName
+    vmName: vmNamePrimC
     location: location
-    vmSize: sizeApp
+    vmSize: effectiveAppSize
     subnetId: vnet.outputs.snetSite2Id
     adminUsername: adminUsername
     adminPassword: adminPassword
@@ -578,6 +721,68 @@ module primcVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     imageOffer: imageOffer
     imageSku: imageSku
     tags: union(commonTags, { role: 'child-primary', site: 'site2' })
+  }
+}
+
+// --- Domain Join: MCM VMs (Tier 3) ------------------------------------------
+
+module djCas 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 3 && joinDomain) {
+  name: 'deploy-dj-cas'
+  scope: rgMainSite
+  dependsOn: [casVm, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameCas
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=App Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+module djPrimA 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 3 && joinDomain) {
+  name: 'deploy-dj-prima'
+  scope: rgMainSite
+  dependsOn: [primaVm, configureAd, promoteDc02]
+  params: {
+    vmName: vmNamePrimA
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=App Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+module djPrimB 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 3 && joinDomain) {
+  name: 'deploy-dj-primb'
+  scope: rgSite1Res
+  dependsOn: [primbVm, configureAd, promoteDc02]
+  params: {
+    vmName: vmNamePrimB
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=App Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+module djPrimC 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 3 && joinDomain) {
+  name: 'deploy-dj-primc'
+  scope: rgSite2Res
+  dependsOn: [primcVm, configureAd, promoteDc02]
+  params: {
+    vmName: vmNamePrimC
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=App Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
   }
 }
 

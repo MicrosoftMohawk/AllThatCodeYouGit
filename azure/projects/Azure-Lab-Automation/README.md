@@ -41,10 +41,15 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### VM Inventory (11 VMs total)
+### VM Inventory
 
-| VM Name | Role | Size | Subnet | Tier |
-|---------|------|------|--------|------|
+The lab deploys up to **11 VMs** (or fewer with `colocateSql`).
+All MCM and SQL VM names are **customizable** at deploy time via an interactive naming prompt or Bicep parameters.
+
+#### Default Layout — Separate SQL (11 VMs)
+
+| Default Name | Role | Size | Subnet | Tier |
+|--------------|------|------|--------|------|
 | `{base}-dc01` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
 | `{base}-dc02` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
 | `{base}-sqcs` | SQL Server (CAS DB) | Standard_D4s_v5 | snet-main | 2 |
@@ -52,10 +57,27 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 | `{base}-sqpb` | SQL Server (PrimB DB) | Standard_D4s_v5 | snet-site1 | 2 |
 | `{base}-sqc1` | SQL AOAG Node 1 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
 | `{base}-sqc2` | SQL AOAG Node 2 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
-| `{base}-cas` | CAS Server | Standard_D4s_v5 | snet-main | 3 |
-| `{base}-prma` | Child Primary A | Standard_D4s_v5 | snet-main | 3 |
-| `{base}-prmb` | Child Primary B | Standard_D4s_v5 | snet-site1 | 3 |
-| `{base}-prmc` | Child Primary C | Standard_D4s_v5 | snet-site2 | 3 |
+| `{base}-cas` | MCM CAS Server | Standard_D4s_v5 | snet-main | 3 |
+| `{base}-prma` | MCM Child Primary A | Standard_D4s_v5 | snet-main | 3 |
+| `{base}-prmb` | MCM Child Primary B | Standard_D4s_v5 | snet-site1 | 3 |
+| `{base}-prmc` | MCM Child Primary C | Standard_D4s_v5 | snet-site2 | 3 |
+
+#### Colocated SQL Layout — SQL on MCM Servers (8 VMs)
+
+When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as MCM. The MCM VMs are upsized to Standard_D8s_v5 and get data disks. Site 2 AOAG nodes are always separate.
+
+| Default Name | Role | Size | Subnet | Tier |
+|--------------|------|------|--------|------|
+| `{base}-dc01` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
+| `{base}-dc02` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
+| `{base}-sqc1` | SQL AOAG Node 1 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
+| `{base}-sqc2` | SQL AOAG Node 2 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
+| `{base}-cas` | MCM CAS + SQL | Standard_D8s_v5 | snet-main | 3 |
+| `{base}-prma` | MCM Primary A + SQL | Standard_D8s_v5 | snet-main | 3 |
+| `{base}-prmb` | MCM Primary B + SQL | Standard_D8s_v5 | snet-site1 | 3 |
+| `{base}-prmc` | MCM Child Primary C | Standard_D4s_v5 | snet-site2 | 3 |
+
+> **Note:** All VM names (except DCs) can be overridden during deployment. The script displays a naming table and lets you customize each name.
 
 ---
 
@@ -72,12 +94,23 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 
 Ensure your subscription has sufficient vCPU quota in the target region:
 
+#### Separate SQL mode (default — 11 VMs)
+
 | VM Size | vCPUs each | Count | Total vCPUs |
 |---------|-----------|-------|-------------|
 | Standard_D2s_v5 | 2 | 2 (DCs) | 4 |
-| Standard_D4s_v5 | 4 | 7 (SQL standalone + App) | 28 |
+| Standard_D4s_v5 | 4 | 7 (3 standalone SQL + 4 MCM) | 28 |
 | Standard_D8s_v5 | 8 | 2 (SQL AOAG) | 16 |
 | **Total** | | **11** | **48 vCPUs** |
+
+#### Colocated SQL mode (`-ColocateSql` — 8 VMs)
+
+| VM Size | vCPUs each | Count | Total vCPUs |
+|---------|-----------|-------|-------------|
+| Standard_D2s_v5 | 2 | 2 (DCs) | 4 |
+| Standard_D4s_v5 | 4 | 1 (PrimC — no SQL) | 4 |
+| Standard_D8s_v5 | 8 | 5 (3 MCM+SQL colocated + 2 AOAG) | 40 |
+| **Total** | | **8** | **48 vCPUs** |
 
 Check quota:
 ```bash
@@ -108,10 +141,31 @@ The deployment uses a **tiered** approach so you can deploy incrementally:
 | Tier | What Gets Deployed | Use Case |
 |------|-------------------|----------|
 | **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), Cloud Witness Storage, Key Vault, **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
-| **2** | + 5 SQL VMs (with data disks), Availability Set, Internal Load Balancer | Add SQL infrastructure |
-| **3** | + 4 Application VMs (CAS + 3 child primaries) | Full lab deployment |
+| **2** | + SQL VMs (with data disks), Availability Set, Internal Load Balancer. Standalone SQL VMs are skipped when `colocateSql` is true — only AOAG nodes are deployed. **Auto domain-join** SQL VMs (unless `joinDomain=false`). | Add SQL infrastructure |
+| **3** | + MCM Application VMs (CAS + 3 child primaries). When `colocateSql` is true, MCM VMs are upsized and get data disks for SQL. **Auto domain-join** MCM VMs (unless `joinDomain=false`). | Full lab deployment |
 
-Each tier is **cumulative** — Tier 3 includes everything from Tiers 1 and 2. You can deploy Tier 1 first, then redeploy with Tier 2 or 3 later — the deployment is idempotent.
+Each tier is **cumulative** — Tier 3 includes everything from Tiers 1 and 2.
+
+### Incremental Deployment
+
+You can deploy Tier 1 first, then **incrementally** deploy Tier 2 or 3 later. The deployment script:
+
+- **Auto-detects** existing Tier 1 infrastructure (resource groups, Key Vault, DCs)
+- **Reuses** the admin password from Key Vault (prevents DC extension re-execution)
+- **Auto-detects** the AD domain name from DC01 (no need to re-enter it)
+- **Skips** Key Vault RBAC prompts on incremental runs
+- **Validates** the Azure CLI token before deployment (re-authenticates if expired)
+
+```powershell
+# Deploy Tier 1 first
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 1
+
+# Later, add Tier 2 (domain name auto-detected from DC01)
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 2
+
+# Or supply domain name explicitly to skip auto-detection
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 2 -DomainName azlab.local
+```
 
 ---
 
@@ -133,6 +187,18 @@ cd "Azure Lab"
 # Core networking and AD only (Tier 1)
 .\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 1
 
+# Incrementally add Tier 2 onto existing Tier 1
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 2
+
+# Full lab with SQL colocated on MCM servers
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -ColocateSql
+
+# Deploy without domain-joining SQL/MCM VMs (workgroup servers)
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -SkipDomainJoin
+
+# Supply domain name to skip interactive prompt / auto-detection
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 2 -DomainName azlab.local
+
 # Preview changes without deploying
 .\deploy.ps1 -BaseName azlab -Location eastus -WhatIf
 
@@ -142,12 +208,20 @@ cd "Azure Lab"
 
 The script will:
 - Check for Az CLI and Bicep CLI (installs Bicep if missing)
-- Validate your Azure login (opens browser if needed)
-- Prompt for Key Vault Administrator (user UPN or Entra ID group)
+- Validate your Azure login **with token verification** (re-authenticates if expired)
+- On **incremental deployments** (Tier 2+ on existing Tier 1):
+  - Auto-detect existing infrastructure and reuse the admin password from Key Vault
+  - Auto-detect the AD domain name from DC01 (or accept `-DomainName` parameter)
+  - Skip Key Vault RBAC prompts
+- Prompt for Key Vault Administrator (user UPN or Entra ID group) — first deployment only
 - Compile and validate the Bicep template
-- Auto-generate a secure admin password (stored in Key Vault)
-- Prompt for the AD domain name
+- Auto-generate a secure admin password (stored in Key Vault) — first deployment only
+- Prompt for the AD domain name — first deployment only (or accept `-DomainName`)
+- Display an **interactive naming table** for MCM/SQL servers — accept defaults or customize
+- Offer the option to **colocate SQL on MCM servers** (or pass `-ColocateSql`)
+- Prompt to **domain-join** SQL and MCM VMs (default: yes) — or pass `-SkipDomainJoin`
 - Generate self-signed root CA + client certificates for VPN (P2S)
+- Refresh the Azure CLI token before deploying
 - Execute the deployment
 
 ### 3. Deploy Using Azure CLI Directly
@@ -200,7 +274,7 @@ az deployment sub show --name <deployment-name> --query properties.outputs
 ```
 Azure-Lab/
 ├── README.md                              # This file
-├── deploy.ps1                             # PowerShell wrapper (prereq checks + deploy)
+├── deploy.ps1                             # PowerShell wrapper (prereqs, incremental detection, naming, deploy)
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
 ├── main.bicep                             # Subscription-scoped orchestrator
 ├── bicepconfig.json                       # Bicep linter / analyzer config
@@ -228,6 +302,7 @@ Azure-Lab/
         ├── promoteDC.bicep                # CSE: Promote DC01 as first DC (new forest)
         ├── configureAD.bicep              # RunCommand: OUs, groups, svc accounts, gMSA
         ├── replicaDC.bicep                # CSE: Promote DC02 as replica DC
+        ├── domainJoin.bicep               # JsonADDomainExtension: join VM to AD domain
         └── scripts/
             └── Configure-AD.ps1           # AD configuration script (loaded inline)
 ```
@@ -236,18 +311,48 @@ Azure-Lab/
 
 ## Parameters Reference
 
+### deploy.ps1 Script Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-BaseName` | string | (required) | Base name prefix for all resources (max 10 chars) |
+| `-Location` | string | (required) | Azure region |
+| `-DeploymentTier` | int | `3` | 1 = Core/AD, 2 = +SQL, 3 = +MCM servers (full) |
+| `-DomainName` | string | (auto) | AD domain name. Skips prompt on first run; auto-detected from DC01 on incremental runs |
+| `-ColocateSql` | switch | `$false` | When set, SQL runs on MCM servers (no separate SQL VMs) |
+| `-SkipDomainJoin` | switch | `$false` | When set, SQL and MCM VMs are NOT domain-joined (deployed as workgroup servers) |
+| `-SubscriptionId` | string | (current) | Target Azure subscription ID |
+| `-WhatIf` | switch | `$false` | Preview deployment changes without applying |
+| `-Destroy` | switch | `$false` | Delete all lab resource groups |
+
+### Bicep Template Parameters (main.bicep)
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `baseName` | string | `azlab` | Base name prefix for all resources (max 10 chars) |
 | `location` | string | `eastus` | Azure region |
-| `deploymentTier` | int | `3` | 1 = Core/AD, 2 = +SQL, 3 = +App servers (full) |
+| `deploymentTier` | int | `3` | 1 = Core/AD, 2 = +SQL, 3 = +MCM servers (full) |
+| `colocateSql` | bool | `false` | When true, SQL runs on MCM servers (no separate SQL VMs for CAS/PrimA/PrimB) |
+| `joinDomain` | bool | `true` | When true, SQL and MCM VMs are auto-joined to the AD domain using `svc-domjoin`. SQL VMs → OU=SQL Servers, MCM VMs → OU=App Servers |
 | `adminUsername` | string | `labadmin` | Local admin username for all VMs |
 | `adminPassword` | securestring | — | Local admin password (auto-generated by deploy.ps1) |
-| `domainName` | string | — | AD domain name (prompted by deploy.ps1, e.g., azlab.local) |
+| `domainName` | string | — | AD domain name (prompted or auto-detected by deploy.ps1) |
 | `sizeDC` | string | `Standard_D2s_v5` | VM size for Domain Controllers |
-| `sizeApp` | string | `Standard_D4s_v5` | VM size for CAS and Primary servers |
+| `sizeApp` | string | `Standard_D4s_v5` | VM size for MCM servers (when SQL is separate) |
+| `sizeAppColocated` | string | `Standard_D8s_v5` | VM size for MCM servers when SQL is colocated |
 | `sizeSQL` | string | `Standard_D4s_v5` | VM size for standalone SQL VMs |
 | `sizeSQLAoag` | string | `Standard_D8s_v5` | VM size for AOAG SQL VMs |
+| **VM Naming** | | | |
+| `vmNameSqlCas` | string | `{base}-sqcs` | SQL VM for CAS site (ignored when colocateSql=true) |
+| `vmNameSqlPrimA` | string | `{base}-sqpa` | SQL VM for Primary A (ignored when colocateSql=true) |
+| `vmNameSqlPrimB` | string | `{base}-sqpb` | SQL VM for Primary B (ignored when colocateSql=true) |
+| `vmNameSqlAoag1` | string | `{base}-sqc1` | SQL AOAG Node 1 (Site 2) |
+| `vmNameSqlAoag2` | string | `{base}-sqc2` | SQL AOAG Node 2 (Site 2) |
+| `vmNameCas` | string | `{base}-cas` | MCM CAS server |
+| `vmNamePrimA` | string | `{base}-prma` | MCM Child Primary A |
+| `vmNamePrimB` | string | `{base}-prmb` | MCM Child Primary B |
+| `vmNamePrimC` | string | `{base}-prmc` | MCM Child Primary C |
+| **Networking** | | | |
 | `vnetAddressPrefix` | string | `10.0.0.0/16` | VNet address space |
 | `snetBastionPrefix` | string | `10.0.0.0/26` | Azure Bastion subnet CIDR |
 | `snetAdPrefix` | string | `10.0.1.0/24` | AD subnet CIDR |
@@ -320,11 +425,21 @@ AD DS is automatically configured during Tier 1 deployment:
 
 > **Note:** After DC promotion, VMs may need a restart to pick up the custom DNS settings. DCs reboot automatically after promotion.
 
-### 3. Domain-Join Remaining Servers
-After AD is operational, domain-join SQL and application VMs using the `svc-domjoin` account.
+### 3. Domain Join (Automated by Default)
+By default, all SQL and MCM VMs are **automatically domain-joined** during deployment using the `svc-domjoin` service account (created by the AD automation in Tier 1).
+
+- **SQL VMs** are placed in `OU=SQL Servers,OU=Lab Servers,DC=...,DC=...`
+- **MCM VMs** are placed in `OU=App Servers,OU=Lab Servers,DC=...,DC=...`
+- The join uses the `JsonADDomainExtension` (Microsoft.Compute.JsonADDomainExtension)
+- VMs reboot automatically after joining the domain
+- The extension depends on AD configuration completing first (OUs and svc-domjoin must exist)
+
+If you deployed with `-SkipDomainJoin` (or `joinDomain=false`), VMs remain in a workgroup. You can domain-join them manually later using the `svc-domjoin` account.
 
 ### 4. SQL Server Installation
-1. Install SQL Server (Enterprise or Developer edition) on all 5 SQL VMs
+1. Install SQL Server (Enterprise or Developer edition) on SQL VMs
+   - **Separate SQL mode**: Install on all dedicated SQL VMs
+   - **Colocated SQL mode**: Install on the MCM VMs (CAS, PrimA, PrimB) and AOAG nodes
 2. SQL VMs have **2 × 128GB Premium SSD data disks** pre-attached:
    - LUN 0: SQL Data files (drive D:)
    - LUN 1: SQL Log files (drive E:)
@@ -362,11 +477,13 @@ After AD is operational, domain-join SQL and application VMs using the `svc-domj
      }
    ```
 
-### 6. Application Workload Installation
-1. **Install CAS** on `{base}-cas` using SQL on `{base}-sqcs`
-2. **Install Primary A** on `{base}-prma` using SQL on `{base}-sqpa` (same site as CAS)
-3. **Install Primary B** on `{base}-prmb` using SQL on `{base}-sqpb` (remote Site 1)
-4. **Install Primary C** on `{base}-prmc` using AOAG listener `LISTENER-C` on the Site 2 SQL cluster
+### 6. MCM Application Workload Installation
+1. **Install CAS** on the CAS VM using its SQL instance (colocated or dedicated)
+2. **Install Primary A** on the PrimA VM using its SQL instance (same site as CAS)
+3. **Install Primary B** on the PrimB VM using its SQL instance (remote Site 1)
+4. **Install Primary C** on the PrimC VM using AOAG listener `LISTENER-C` on the Site 2 SQL cluster
+
+> **Note:** When colocated, SQL is on the same VM as the MCM role — update SQL instance names accordingly during MCM setup.
 
 > **Important:** When installing child primaries below a CAS, use the **CD.Latest** source media from the CAS site to ensure version compatibility. See [Microsoft docs](https://learn.microsoft.com/mem/configmgr/core/servers/deploy/install/setup-wizard-central-primary).
 
@@ -378,9 +495,9 @@ After AD is operational, domain-join SQL and application VMs using the `svc-domj
 |---------------|----------|
 | `{base}-rg-network` | VNet, NSGs, Azure Bastion, VPN Gateway, Public IPs |
 | `{base}-rg-identity` | DC01, DC02, Key Vault, Cloud Witness Storage Account |
-| `{base}-rg-main` | SQL-CAS, SQL-PrimA, CAS, PrimaryA |
-| `{base}-rg-site1` | SQL-PrimB, PrimaryB |
-| `{base}-rg-site2` | SQL-PrimC01, SQL-PrimC02, Availability Set, ILB, PrimaryC |
+| `{base}-rg-main` | SQL-CAS, SQL-PrimA, CAS, PrimaryA (SQL VMs omitted when colocated) |
+| `{base}-rg-site1` | SQL-PrimB, PrimaryB (SQL VM omitted when colocated) |
+| `{base}-rg-site2` | SQL AOAG Node 1, SQL AOAG Node 2, Availability Set, ILB, PrimaryC |
 
 ---
 
@@ -418,6 +535,9 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 |-------|----------|
 | **Quota exceeded** | Request quota increase: Portal → Subscriptions → Usage + quotas |
 | **Deployment timeout** | Azure Bastion can take 10-15 minutes. Increase timeout or retry. |
+| **Token expired / invalid_grant** | The script now validates the token before deployment. If you still see this, run `az logout` then `az login` manually. |
+| **Incremental deploy re-runs DC extensions** | Ensure the script detects existing Tier 1 and reuses the admin password from Key Vault. Pass `-DomainName` if auto-detection fails. |
+| **GatewaySubnet deletion error** | The VNet template includes GatewaySubnet inline to prevent this. If upgrading from an older version, redeploy once to reconcile. |
 | **Name conflict** | Storage account names are globally unique. Change `baseName` or the name will auto-resolve via `uniqueString()`. |
 | **Bicep compilation error** | Run `az bicep build --file main.bicep` to see detailed errors |
 | **Can't connect via Bastion** | Ensure NSG on target subnet allows inbound from `AzureBastionSubnet` on port 3389 (configured by default) |
@@ -430,6 +550,8 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 | **AD configuration failure** | Check `C:\WindowsTemp\ConfigureAD.log` on DC01. RunCommand has 900s timeout. |
 | **Domain not reachable from DC02** | Verify DC01 promotion completed, DNS resolves the domain name |
 | **VM not domain-joined** | Ensure VMs have restarted after VNet DNS was set to DC IPs |
+| **Domain join extension failed** | Check the VM's extensions blade in the Azure Portal. The `JoinDomain` extension logs errors there. Verify DC01/DC02 are running, DNS resolves the domain, and `svc-domjoin` account exists in AD. |
+| **Password breaks az CLI on Windows** | The admin password charset avoids `&`, `%`, `^` which break cmd.exe argument parsing. If you see truncated parameter errors, regenerate with a fresh deploy. |
 
 ---
 

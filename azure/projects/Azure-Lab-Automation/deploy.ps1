@@ -83,6 +83,10 @@ param(
 
     [switch]$SkipDomainJoin,
 
+    [switch]$DeployArtifacts,
+
+    [string]$TimeZone,
+
     [switch]$WhatIf,
 
     [switch]$Destroy
@@ -453,6 +457,41 @@ if ([string]::IsNullOrWhiteSpace($DomainName) -or $DomainName -notmatch '^[a-zA-
 Write-Ok "Domain: $DomainName (NetBIOS: $($DomainName.Split('.')[0].ToUpper()))"
 
 # =============================================================================
+# 3aa. VM Timezone Selection
+# =============================================================================
+$timezoneOptions = [ordered]@{
+    '1' = @{ Name = 'Eastern Standard Time';  Display = 'Eastern  (UTC-5)' }
+    '2' = @{ Name = 'Central Standard Time';  Display = 'Central  (UTC-6)' }
+    '3' = @{ Name = 'Mountain Standard Time'; Display = 'Mountain (UTC-7)' }
+    '4' = @{ Name = 'Pacific Standard Time';  Display = 'Pacific  (UTC-8)' }
+    '5' = @{ Name = 'UTC';                    Display = 'UTC' }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($TimeZone)) {
+    $VmTimeZone = $TimeZone
+    Write-Ok "VM Timezone (from parameter): $VmTimeZone"
+} else {
+    Write-Step "Select VM timezone..."
+    foreach ($key in $timezoneOptions.Keys) {
+        $opt = $timezoneOptions[$key]
+        Write-Host "   [$key] $($opt.Display)" -ForegroundColor White
+    }
+    Write-Host "   [6] Custom (enter Windows timezone name)" -ForegroundColor White
+    $tzChoice = Read-Host "`n   Enter choice (1-6, default: 1 — Eastern)"
+    if ([string]::IsNullOrWhiteSpace($tzChoice)) { $tzChoice = '1' }
+
+    if ($tzChoice -match '^[1-5]$') {
+        $VmTimeZone = $timezoneOptions[$tzChoice].Name
+    } elseif ($tzChoice -eq '6') {
+        $VmTimeZone = Read-Host "   Enter Windows timezone name (e.g., 'Hawaiian Standard Time')"
+    } else {
+        Write-Fail "Invalid choice. Defaulting to Eastern Standard Time."
+        $VmTimeZone = 'Eastern Standard Time'
+    }
+}
+Write-Ok "VM Timezone: $VmTimeZone"
+
+# =============================================================================
 # 3a. Server Naming Convention + Colocated SQL Option
 # =============================================================================
 # Default VM names (max 15 chars for Windows computer name)
@@ -680,6 +719,7 @@ $vmNameParams = @(
 )
 $colocateParam = if ($ColocateSqlBool) { 'colocateSql=true' } else { 'colocateSql=false' }
 $joinDomainParam = if ($JoinDomainBool) { 'joinDomain=true' } else { 'joinDomain=false' }
+$artifactsParam = if ($DeployArtifacts) { 'deployArtifacts=true' } else { 'deployArtifacts=false' }
 
 # Build the complete --parameters array (each key=value as a separate element
 # so PowerShell passes them as individual arguments to az CLI).
@@ -697,6 +737,7 @@ $deployParams = @(
     "vpnRootCertData=$VpnRootCertData"
     $colocateParam
     $joinDomainParam
+    $artifactsParam
 ) + $vmNameParams
 
 Write-Header "Deployment Summary"
@@ -706,7 +747,9 @@ Write-Host "  Deployment Tier : $DeploymentTier — $tierDescription" -Foregroun
 Write-Host "  Incremental     : $IsIncremental" -ForegroundColor White
 Write-Host "  SQL Colocated   : $ColocateSqlBool" -ForegroundColor White
 Write-Host "  Domain Join     : $JoinDomainBool" -ForegroundColor White
+Write-Host "  Artifacts Share : $DeployArtifacts" -ForegroundColor White
 Write-Host "  Domain Name     : $DomainName" -ForegroundColor White
+Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White
 Write-Host "  Admin Password  : $(if ($IsIncremental) {'(reused from Key Vault)'} else {'(auto-generated, stored in Key Vault)'})" -ForegroundColor White
 Write-Host "  Template        : $templateFile" -ForegroundColor White
@@ -760,6 +803,236 @@ if ($LASTEXITCODE -ne 0) {
     Write-Fail "Deployment failed. Check the Azure portal or run:"
     Write-Host "   az deployment sub show --name $deploymentName --query properties.error" -ForegroundColor Gray
     exit 1
+}
+
+# =============================================================================
+# 5a0. Post-Deployment: Set VM Timezone via RunCommand
+# =============================================================================
+# Azure ARM does not allow changing windowsConfiguration.timeZone on existing VMs,
+# so we set the timezone via RunCommand (Set-TimeZone) which works on both new
+# and existing VMs regardless of their current state.
+# =============================================================================
+if ($VmTimeZone -ne 'UTC') {
+    Write-Header "Setting VM Timezone to $VmTimeZone"
+
+    # Build list of VMs and their resource groups
+    $vmTargets = @(
+        @{ Name = "$BaseName-dc01"; RG = "$BaseName-rg-identity" }
+        @{ Name = "$BaseName-dc02"; RG = "$BaseName-rg-identity" }
+    )
+    if ($DeploymentTier -ge 2) {
+        if (-not $ColocateSqlBool) {
+            $vmTargets += @{ Name = $VmNames.SqlCas;  RG = "$BaseName-rg-main" }
+            $vmTargets += @{ Name = $VmNames.SqlPrimA; RG = "$BaseName-rg-main" }
+            $vmTargets += @{ Name = $VmNames.SqlPrimB; RG = "$BaseName-rg-site1" }
+        }
+        $vmTargets += @{ Name = $VmNames.SqlAoag1; RG = "$BaseName-rg-site2" }
+        $vmTargets += @{ Name = $VmNames.SqlAoag2; RG = "$BaseName-rg-site2" }
+    }
+    if ($DeploymentTier -ge 3) {
+        $vmTargets += @{ Name = $VmNames.Cas;   RG = "$BaseName-rg-main" }
+        $vmTargets += @{ Name = $VmNames.PrimA; RG = "$BaseName-rg-main" }
+        $vmTargets += @{ Name = $VmNames.PrimB; RG = "$BaseName-rg-site1" }
+        $vmTargets += @{ Name = $VmNames.PrimC; RG = "$BaseName-rg-site2" }
+    }
+
+    $tzFailed = 0
+    foreach ($vm in $vmTargets) {
+        Write-Host "   Setting timezone on $($vm.Name)..." -ForegroundColor White -NoNewline
+        $tzResult = az vm run-command invoke `
+            --resource-group $vm.RG `
+            --name $vm.Name `
+            --command-id RunPowerShellScript `
+            --scripts "Set-TimeZone -Id '$VmTimeZone'" `
+            --query "value[0].message" -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host " OK" -ForegroundColor Green
+        } else {
+            Write-Host " FAILED" -ForegroundColor Red
+            $tzFailed++
+        }
+    }
+    if ($tzFailed -eq 0) {
+        Write-Ok "All VMs set to $VmTimeZone"
+    } else {
+        Write-Host "   WARNING: $tzFailed VM(s) failed timezone update. You can set manually via RDP: Set-TimeZone -Id '$VmTimeZone'" -ForegroundColor Yellow
+    }
+} else {
+    Write-Ok "VM Timezone: UTC (default — no change needed)"
+}
+
+# =============================================================================
+# 5a. Post-Deployment: Configure AD DS Authentication for Artifacts File Share
+# =============================================================================
+# After the Bicep deployment creates the storage account, we domain-join it to
+# the on-prem AD so domain-joined VMs can mount the share with Kerberos (no
+# shared key or SAS needed).  Steps:
+#   1. Create a computer account in AD for the storage account  (RunCommand on DC01)
+#   2. Enable AD DS auth on the storage account                 (az CLI from here)
+#   3. Sync the Kerberos key between Azure and the AD account   (az CLI + RunCommand)
+# =============================================================================
+if ($DeployArtifacts) {
+    Write-Header "Configuring AD Authentication for Artifacts File Share"
+
+    # --- Get the storage account name from deployment outputs -----------------
+    $stgName = az deployment sub show `
+        --name $deploymentName `
+        --query "properties.outputs.artifactsStorageAccount.value" -o tsv 2>&1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($stgName) -or $stgName -eq 'not-deployed') {
+        Write-Host "   WARNING: Could not retrieve artifacts storage account name. Skipping AD auth setup." -ForegroundColor Yellow
+        Write-Host "   You can configure AD auth manually later." -ForegroundColor Yellow
+    } else {
+        $stgName = $stgName.Trim()
+        $rgMain = "$BaseName-rg-main"
+        Write-Ok "Artifacts storage account: $stgName"
+
+        # --- Check if AD auth is already enabled on the storage account -------
+        $currentAuth = az storage account show `
+            --name $stgName --resource-group $rgMain `
+            --query "azureFilesIdentityBasedAuthentication.directoryServiceOptions" -o tsv 2>&1
+        if ($currentAuth -eq 'AD') {
+            Write-Ok "AD DS authentication already configured — skipping"
+        } else {
+            # --- Step 1: Create computer account in AD on DC01 ----------------
+            Write-Step "Creating AD computer account for storage on DC01..."
+
+            # Write the AD setup script to a temp file to avoid cmd.exe escaping issues
+            $adScriptFile = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.ps1'
+            @"
+Import-Module ActiveDirectory
+`$domain = Get-ADDomain
+`$domainDN = `$domain.DistinguishedName
+`$stgName = '$stgName'
+`$ouPath = "OU=Service Accounts,OU=Lab Accounts,`$domainDN"
+
+if (-not (Get-ADComputer -Filter "Name -eq '`$stgName'" -ErrorAction SilentlyContinue)) {
+    New-ADComputer -Name `$stgName -Path `$ouPath -Description 'Azure Files storage account' -Enabled `$true
+    Set-ADComputer -Identity `$stgName -ServicePrincipalNames @{Add="cifs/`$stgName.file.core.windows.net"}
+    Write-Output 'CREATED=true'
+} else {
+    Write-Output 'CREATED=exists'
+}
+
+`$computer = Get-ADComputer -Identity `$stgName
+Write-Output ("DOMAIN_NAME=" + `$domain.DNSRoot)
+Write-Output ("DOMAIN_GUID=" + `$domain.ObjectGUID)
+Write-Output ("DOMAIN_SID=" + `$domain.DomainSID)
+Write-Output ("FOREST_NAME=" + `$domain.Forest)
+Write-Output ("NETBIOS_NAME=" + `$domain.NetBIOSName)
+Write-Output ("STORAGE_SID=" + `$computer.SID)
+Write-Output ("SAM_ACCOUNT=" + `$computer.SamAccountName.TrimEnd('`$'))
+"@ | Set-Content -Path $adScriptFile -Encoding UTF8
+
+            $adResult = az vm run-command invoke `
+                --resource-group "$BaseName-rg-identity" `
+                --name "$BaseName-dc01" `
+                --command-id RunPowerShellScript `
+                --scripts "@$adScriptFile" `
+                --query "value[0].message" -o tsv 2>&1
+
+            Remove-Item -Path $adScriptFile -Force -ErrorAction SilentlyContinue
+
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "Failed to create AD computer account on DC01."
+                Write-Host "   Error: $adResult" -ForegroundColor Red
+                Write-Host "   You can configure AD auth manually later." -ForegroundColor Yellow
+            } else {
+                # Parse key=value pairs from RunCommand output
+                # RunCommand output may contain [stdout] / [stderr] markers — skip those
+                $adInfo = @{}
+                foreach ($line in ($adResult -split "[\r\n]+")) {
+                    $line = $line.Trim()
+                    if ($line -match '^([A-Z_]+)=(.+)$') {
+                        $adInfo[$Matches[1]] = $Matches[2].Trim()
+                    }
+                }
+
+                if ($adInfo['DOMAIN_GUID'] -and $adInfo['STORAGE_SID']) {
+                    $createdStatus = $adInfo['CREATED']
+                    if ($createdStatus -eq 'exists') {
+                        Write-Ok "AD computer account already exists: $stgName"
+                    } else {
+                        Write-Ok "AD computer account created: $stgName in $($adInfo['DOMAIN_NAME'])"
+                    }
+
+                    # --- Step 2: Enable AD DS auth on the storage account -----
+                    Write-Step "Enabling on-prem AD DS authentication on storage account..."
+                    az storage account update `
+                        --name $stgName `
+                        --resource-group $rgMain `
+                        --enable-files-adds true `
+                        --domain-name $adInfo['DOMAIN_NAME'] `
+                        --domain-guid $adInfo['DOMAIN_GUID'] `
+                        --domain-sid $adInfo['DOMAIN_SID'] `
+                        --forest-name $adInfo['FOREST_NAME'] `
+                        --net-bios-domain-name $adInfo['NETBIOS_NAME'] `
+                        --azure-storage-sid $adInfo['STORAGE_SID'] `
+                        --sam-account-name $adInfo['SAM_ACCOUNT'] `
+                        --account-type Computer `
+                        --default-share-permission StorageFileDataSmbShareContributor `
+                        -o none 2>&1
+
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Fail "Failed to enable AD DS auth on storage account."
+                        Write-Host "   You can configure AD auth manually later." -ForegroundColor Yellow
+                    } else {
+                        Write-Ok "AD DS authentication enabled"
+
+                        # --- Step 3: Sync Kerberos key -------------------------
+                        Write-Step "Synchronizing Kerberos key..."
+                        az storage account keys renew `
+                            --account-name $stgName `
+                            --resource-group $rgMain `
+                            --key key1 `
+                            --key-type kerb `
+                            -o none 2>&1 | Out-Null
+
+                        $kerbKey = az storage account keys list `
+                            --account-name $stgName `
+                            --resource-group $rgMain `
+                            --query "[?keyName=='kerb1'].value" -o tsv 2>&1
+
+                        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($kerbKey)) {
+                            $kerbKey = $kerbKey.Trim()
+                            # Convert kerb key to base64 for safe inline transport
+                            $kerbKeyB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($kerbKey))
+                            $samAccount = $adInfo['SAM_ACCOUNT']
+                            # Write sync script to temp file to avoid cmd.exe escaping issues
+                            $syncScriptFile = [System.IO.Path]::GetTempFileName() -replace '\.tmp$', '.ps1'
+                            @"
+Import-Module ActiveDirectory
+`$kerbPlain = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$kerbKeyB64'))
+`$pw = ConvertTo-SecureString `$kerbPlain -AsPlainText -Force
+Set-ADAccountPassword -Identity '$samAccount`$' -NewPassword `$pw -Reset
+Write-Output "SYNCED=true"
+"@ | Set-Content -Path $syncScriptFile -Encoding UTF8
+
+                            $syncResult = az vm run-command invoke `
+                                --resource-group "$BaseName-rg-identity" `
+                                --name "$BaseName-dc01" `
+                                --command-id RunPowerShellScript `
+                                --scripts "@$syncScriptFile" `
+                                --query "value[0].message" -o tsv 2>&1
+
+                            Remove-Item -Path $syncScriptFile -Force -ErrorAction SilentlyContinue
+
+                            if ($LASTEXITCODE -eq 0 -and $syncResult -match 'SYNCED=true') {
+                                Write-Ok "Kerberos key synchronized — domain-joined VMs can now mount the share"
+                            } else {
+                                Write-Host "   WARNING: Kerberos key sync failed. Domain-joined mount may not work." -ForegroundColor Yellow
+                                Write-Host "   You can resync manually: Update-AzStorageAccountADObjectPassword" -ForegroundColor Gray
+                            }
+                        } else {
+                            Write-Host "   WARNING: Could not retrieve kerb1 key. Domain-joined mount may not work." -ForegroundColor Yellow
+                        }
+                    }
+                } else {
+                    Write-Fail "Could not parse AD domain info from DC01 output."
+                    Write-Host "   You can configure AD auth manually later." -ForegroundColor Yellow
+                }
+            }
+        }
+    }
 }
 
 # =============================================================================
@@ -840,6 +1113,13 @@ if ($DeploymentTier -ge 3) {
     Write-Host "     - $($VmNames.PrimA): Child Primary A (Main site)" -ForegroundColor Gray
     Write-Host "     - $($VmNames.PrimB): Child Primary B (Site 1)" -ForegroundColor Gray
     Write-Host "     - $($VmNames.PrimC): Child Primary C (Site 2, uses AOAG listener)" -ForegroundColor Gray
+}
+if ($DeployArtifacts) {
+    Write-Host "" -ForegroundColor White
+    Write-Host "  Artifacts File Share (AD DS auth, SAS disabled):" -ForegroundColor Cyan
+    Write-Host "    Storage account deployed in $BaseName-rg-main with a 100 GiB 'artifacts' share." -ForegroundColor Gray
+    Write-Host "    Domain VMs: net use Z: \\\\<stg>.file.core.windows.net\artifacts  (uses Kerberos)" -ForegroundColor Gray
+    Write-Host "    Azure portal: deployer has RBAC (SMB Share Elevated Contributor)" -ForegroundColor Gray
 }
 
 Write-Host ""

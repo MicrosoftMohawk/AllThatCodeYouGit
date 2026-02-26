@@ -44,12 +44,35 @@ $svcSecure = ConvertTo-SecureString $SvcPassword -AsPlainText -Force
 $domainDN = ($DomainName -split '\.' | ForEach-Object { "DC=$_" }) -join ','
 
 # ============================================================================
+# Configure DNS Forwarder — Azure internal DNS (168.63.129.16)
+# ============================================================================
+# The DC's DNS server is authoritative for the AD zone only.  Without a
+# forwarder, VMs using the DC as their DNS server cannot resolve public names
+# (e.g., *.file.core.windows.net, *.blob.core.windows.net, Windows Update).
+# Azure's wireserver DNS (168.63.129.16) resolves all public + Azure private
+# DNS names and is reachable from every Azure VM.
+# ============================================================================
+Write-Output "Configuring DNS forwarder to Azure DNS (168.63.129.16)..."
+try {
+    $existing = (Get-DnsServerForwarder).IPAddress.IPAddressToString
+    if ($existing -notcontains '168.63.129.16') {
+        Add-DnsServerForwarder -IPAddress '168.63.129.16' -PassThru | Out-Null
+        Write-Output "  DNS forwarder added: 168.63.129.16"
+    } else {
+        Write-Output "  DNS forwarder already configured: 168.63.129.16"
+    }
+} catch {
+    Write-Output "  WARNING: Failed to configure DNS forwarder (non-fatal): $_"
+}
+
+# ============================================================================
 # Create OU Structure
 # ============================================================================
 Write-Output "Creating OU structure..."
 $ous = @(
     @{ Name = 'Lab Accounts';       Parent = $domainDN }
     @{ Name = 'Service Accounts';   Parent = "OU=Lab Accounts,$domainDN" }
+    @{ Name = 'Admins';             Parent = "OU=Lab Accounts,$domainDN" }
     @{ Name = 'Lab Groups';         Parent = $domainDN }
     @{ Name = 'Lab Servers';        Parent = $domainDN }
     @{ Name = 'SQL Servers';        Parent = "OU=Lab Servers,$domainDN" }
@@ -103,6 +126,12 @@ $svcAccounts = @(
     @{ Name = 'svc-sqlagent';  Desc = 'SQL Agent service account';      Groups = @('GRP-SQLAdmins') }
     @{ Name = 'svc-appnaa';   Desc = 'Application Network Access Account';     Groups = @('GRP-AppAdmins') }
 )
+
+# --- Admin accounts (placed in OU=Admins,OU=Lab Accounts) --------------------
+$adminOU = "OU=Admins,OU=Lab Accounts,$domainDN"
+$adminAccounts = @(
+    @{ Name = 'mcm-admin'; Desc = 'MCM Administrator account'; Groups = @('GRP-AppAdmins', 'GRP-DomainAdmins-Lab') }
+)
 foreach ($svc in $svcAccounts) {
     if (-not (Get-ADUser -Filter "SamAccountName -eq '$($svc.Name)'" -ErrorAction SilentlyContinue)) {
         New-ADUser -Name $svc.Name `
@@ -121,6 +150,28 @@ foreach ($svc in $svcAccounts) {
     # Add to groups
     foreach ($grp in $svc.Groups) {
         Add-ADGroupMember -Identity $grp -Members $svc.Name -ErrorAction SilentlyContinue
+    }
+}
+
+# --- Create admin accounts in the Admins OU -----------------------------------
+Write-Output "Creating admin accounts..."
+foreach ($adm in $adminAccounts) {
+    if (-not (Get-ADUser -Filter "SamAccountName -eq '$($adm.Name)'" -ErrorAction SilentlyContinue)) {
+        New-ADUser -Name $adm.Name `
+            -SamAccountName $adm.Name `
+            -UserPrincipalName "$($adm.Name)@$DomainName" `
+            -Path $adminOU `
+            -Description $adm.Desc `
+            -AccountPassword $svcSecure `
+            -PasswordNeverExpires $true `
+            -CannotChangePassword $true `
+            -Enabled $true
+        Write-Output "  Created admin: $($adm.Name)"
+    } else {
+        Write-Output "  Admin already exists: $($adm.Name)"
+    }
+    foreach ($grp in $adm.Groups) {
+        Add-ADGroupMember -Identity $grp -Members $adm.Name -ErrorAction SilentlyContinue
     }
 }
 
@@ -191,10 +242,12 @@ Write-Output " AD Configuration Complete"
 Write-Output "=========================================="
 Write-Output " Domain:    $DomainName"
 Write-Output " Domain DN: $domainDN"
-Write-Output " OUs:       Lab Accounts, Service Accounts, Lab Groups, Lab Servers, SQL Servers, App Servers"
+Write-Output " OUs:       Lab Accounts, Service Accounts, Admins, Lab Groups, Lab Servers, SQL Servers, App Servers"
 Write-Output " Groups:    GRP-DomainAdmins-Lab, GRP-SQLAdmins, GRP-AppAdmins, GRP-ServerAdmins, GRP-DomainJoin"
 Write-Output " Accounts:  svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa"
+Write-Output " Admins:    mcm-admin"
 Write-Output " gMSA:      gmsa-sqlsvc"
+Write-Output " DNS Fwd:   168.63.129.16 (Azure internal DNS)"
 Write-Output "=========================================="
 
 Stop-Transcript

@@ -146,6 +146,9 @@ foreach ($svc in $svcAccounts) {
         Write-Output "  Created user: $($svc.Name)"
     } else {
         Write-Output "  User already exists: $($svc.Name)"
+        # Always sync password so domain-join credentials stay consistent
+        Set-ADAccountPassword -Identity $svc.Name -Reset -NewPassword $svcSecure
+        Write-Output "  Password synchronized for: $($svc.Name)"
     }
     # Add to groups
     foreach ($grp in $svc.Groups) {
@@ -169,6 +172,8 @@ foreach ($adm in $adminAccounts) {
         Write-Output "  Created admin: $($adm.Name)"
     } else {
         Write-Output "  Admin already exists: $($adm.Name)"
+        Set-ADAccountPassword -Identity $adm.Name -Reset -NewPassword $svcSecure
+        Write-Output "  Password synchronized for: $($adm.Name)"
     }
     foreach ($grp in $adm.Groups) {
         Add-ADGroupMember -Identity $grp -Members $adm.Name -ErrorAction SilentlyContinue

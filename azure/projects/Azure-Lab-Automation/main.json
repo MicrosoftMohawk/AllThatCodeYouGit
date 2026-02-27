@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "11403890312111615286"
+      "templateHash": "2691439119223424027"
     }
   },
   "parameters": {
@@ -2322,7 +2322,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "15168761991673861841"
+              "templateHash": "14978676730037363441"
             }
           },
           "parameters": {
@@ -2393,7 +2393,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; $pw = ConvertTo-SecureString {13}{14}{15} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {16}{17}{18} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({19}{20}\\{21}{22}, $pw); Install-ADDSDomainController -DomainName {23}{24}{25} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), parameters('domainName'), variables('q'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; $pw = ConvertTo-SecureString {13}{14}{15} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {16}{17}{18} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({19}{20}\\{21}{22}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {23}DC promotion attempt $attempt of $maxRetries{24}; try {{ Install-ADDSDomainController -DomainName {25}{26}{27} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {28}Attempt $attempt failed: $_{29}; if ($attempt -lt $maxRetries) {{ Write-Output {30}Waiting 60s before retry...{31}; Start-Sleep 60 }} else {{ throw {32}DC promotion failed after $maxRetries attempts: $_{33} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
             }

@@ -94,9 +94,10 @@ foreach ($ou in $ous) {
 Write-Output "Creating security groups..."
 $groupOU = "OU=Lab Groups,$domainDN"
 $groups = @(
-    @{ Name = 'GRP-DomainAdmins-Lab'; Description = 'Lab domain administrators' }
+    @{ Name = 'GRP-DomainAdmins-Lab'; Description = 'Lab domain administrators (manually populated)' }
     @{ Name = 'GRP-SQLAdmins';        Description = 'SQL Server administrators' }
     @{ Name = 'GRP-AppAdmins';        Description = 'Application server administrators' }
+    @{ Name = 'GRP-MCMAdmins';        Description = 'MCM server administrators' }
     @{ Name = 'GRP-ServerAdmins';     Description = 'General server local administrators' }
     @{ Name = 'GRP-DomainJoin';       Description = 'Accounts permitted to domain-join machines' }
 )
@@ -121,7 +122,7 @@ Write-Output "Creating service accounts..."
 $svcOU = "OU=Service Accounts,OU=Lab Accounts,$domainDN"
 $svcAccounts = @(
     @{ Name = 'svc-domjoin';   Desc = 'Domain Join service account';    Groups = @('GRP-DomainJoin') }
-    @{ Name = 'svc-appadmin'; Desc = 'Application Admin service account'; Groups = @('GRP-AppAdmins', 'GRP-DomainAdmins-Lab') }
+    @{ Name = 'svc-appadmin'; Desc = 'Application Admin service account'; Groups = @('GRP-AppAdmins') }
     @{ Name = 'svc-sqlsvc';    Desc = 'SQL Server service account';     Groups = @('GRP-SQLAdmins') }
     @{ Name = 'svc-sqlagent';  Desc = 'SQL Agent service account';      Groups = @('GRP-SQLAdmins') }
     @{ Name = 'svc-appnaa';   Desc = 'Application Network Access Account';     Groups = @('GRP-AppAdmins') }
@@ -130,7 +131,8 @@ $svcAccounts = @(
 # --- Admin accounts (placed in OU=Admins,OU=Lab Accounts) --------------------
 $adminOU = "OU=Admins,OU=Lab Accounts,$domainDN"
 $adminAccounts = @(
-    @{ Name = 'mcm-admin'; Desc = 'MCM Administrator account'; Groups = @('GRP-AppAdmins', 'GRP-DomainAdmins-Lab') }
+    @{ Name = 'mcm-admin';  Desc = 'MCM Administrator account'; Groups = @('GRP-AppAdmins', 'GRP-MCMAdmins') }
+    @{ Name = 'sql-admin';  Desc = 'SQL Administrator account';  Groups = @('GRP-SQLAdmins') }
 )
 foreach ($svc in $svcAccounts) {
     if (-not (Get-ADUser -Filter "SamAccountName -eq '$($svc.Name)'" -ErrorAction SilentlyContinue)) {
@@ -248,9 +250,9 @@ Write-Output "=========================================="
 Write-Output " Domain:    $DomainName"
 Write-Output " Domain DN: $domainDN"
 Write-Output " OUs:       Lab Accounts, Service Accounts, Admins, Lab Groups, Lab Servers, SQL Servers, App Servers"
-Write-Output " Groups:    GRP-DomainAdmins-Lab, GRP-SQLAdmins, GRP-AppAdmins, GRP-ServerAdmins, GRP-DomainJoin"
+Write-Output " Groups:    GRP-DomainAdmins-Lab (manual), GRP-SQLAdmins, GRP-AppAdmins, GRP-MCMAdmins, GRP-ServerAdmins, GRP-DomainJoin"
 Write-Output " Accounts:  svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa"
-Write-Output " Admins:    mcm-admin"
+Write-Output " Admins:    mcm-admin, sql-admin"
 Write-Output " gMSA:      gmsa-sqlsvc"
 Write-Output " DNS Fwd:   168.63.129.16 (Azure internal DNS)"
 Write-Output "=========================================="

@@ -857,6 +857,47 @@ if ($VmTimeZone -ne 'UTC') {
 }
 
 # =============================================================================
+# 5b. Post-Deployment: Add GRP-MCMAdmins to Local Administrators on MCM VMs
+# =============================================================================
+# After domain join, add the domain group GRP-MCMAdmins to the Local
+# Administrators group on each MCM server so mcm-admin (and any future members)
+# have local admin rights without needing Domain Admins membership.
+# =============================================================================
+if ($DeploymentTier -ge 3 -and $JoinDomainBool) {
+    Write-Header "Adding GRP-MCMAdmins to Local Administrators on MCM VMs"
+
+    $netbios = $DomainName.Split('.')[0].ToUpper()
+    $mcmVms = @(
+        @{ Name = $VmNames.Cas;   RG = "$BaseName-rg-main" }
+        @{ Name = $VmNames.PrimA; RG = "$BaseName-rg-main" }
+        @{ Name = $VmNames.PrimB; RG = "$BaseName-rg-site1" }
+        @{ Name = $VmNames.PrimC; RG = "$BaseName-rg-site2" }
+    )
+
+    $laFailed = 0
+    foreach ($vm in $mcmVms) {
+        Write-Host "   Adding GRP-MCMAdmins to Local Admins on $($vm.Name)..." -ForegroundColor White -NoNewline
+        $laResult = az vm run-command invoke `
+            --resource-group $vm.RG `
+            --name $vm.Name `
+            --command-id RunPowerShellScript `
+            --scripts "Add-LocalGroupMember -Group 'Administrators' -Member '$netbios\GRP-MCMAdmins' -ErrorAction SilentlyContinue; Get-LocalGroupMember -Group 'Administrators' | Select-Object -ExpandProperty Name" `
+            --query "value[0].message" -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host " OK" -ForegroundColor Green
+        } else {
+            Write-Host " FAILED" -ForegroundColor Red
+            $laFailed++
+        }
+    }
+    if ($laFailed -eq 0) {
+        Write-Ok "GRP-MCMAdmins added to Local Administrators on all MCM VMs"
+    } else {
+        Write-Host "   WARNING: $laFailed VM(s) failed. Add manually: Add-LocalGroupMember -Group 'Administrators' -Member '$netbios\GRP-MCMAdmins'" -ForegroundColor Yellow
+    }
+}
+
+# =============================================================================
 # 5. Post-Deployment Summary
 # =============================================================================
 Write-Header "Deployment Complete!"
@@ -909,12 +950,15 @@ Write-Host "  4) AD Domain Services (automated):" -ForegroundColor White
 Write-Host "     - DC01 promoted as first DC in $DomainName" -ForegroundColor Gray
 Write-Host "     - DC02 promoted as replica DC" -ForegroundColor Gray
 Write-Host "     - OUs, security groups, service accounts, and gMSA created" -ForegroundColor Gray
+Write-Host "     - Admin accounts: mcm-admin (GRP-MCMAdmins), sql-admin (GRP-SQLAdmins)" -ForegroundColor Gray
+Write-Host "     - GRP-DomainAdmins-Lab created empty (populate manually)" -ForegroundColor Gray
 Write-Host "     - VNet DNS set to DC IPs (10.0.1.4, 10.0.1.5)" -ForegroundColor Gray
 if ($JoinDomainBool) {
     Write-Host "  5) Domain join (automated):" -ForegroundColor White
     Write-Host "     - SQL and MCM VMs auto-joined to $DomainName using svc-domjoin" -ForegroundColor Gray
     Write-Host "     - SQL VMs placed in OU=SQL Servers,OU=Lab Servers" -ForegroundColor Gray
     Write-Host "     - MCM VMs placed in OU=App Servers,OU=Lab Servers" -ForegroundColor Gray
+    Write-Host "     - GRP-MCMAdmins added to Local Administrators on MCM VMs" -ForegroundColor Gray
 } else {
     Write-Host "  5) Domain-join remaining servers (SQL, MCM) — MANUAL (skipped during deployment)" -ForegroundColor Yellow
 }

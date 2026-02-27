@@ -116,9 +116,6 @@ param colocateSql bool = false
 @description('When true, SQL and MCM VMs are automatically domain-joined after deployment using the svc-domjoin service account.')
 param joinDomain bool = true
 
-@description('When true, deploys an Azure Files storage account (100 GiB share) in rg-main for application ISOs, scripts, and other artifacts.')
-param deployArtifacts bool = false
-
 // --- VM Naming ---------------------------------------------------------------
 // Defaults follow baseName-suffix convention (max 15 chars for Windows).
 // Override via parameters to use your own naming convention.
@@ -790,25 +787,6 @@ module djPrimC 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 3 && 
 }
 
 // =============================================================================
-// Artifacts File Share (opt-in via deployArtifacts parameter)
-// =============================================================================
-
-module artifactsStorage 'modules/storage/artifactsFileShare.bicep' = if (deployArtifacts) {
-  name: 'deploy-artifacts-storage'
-  scope: rgMainSite
-  params: {
-    namePrefix: 'stgart'
-    location: location
-    skuName: 'Standard_LRS'
-    fileShareName: 'artifacts'
-    fileShareQuotaGiB: 100
-    deployerObjectId: deployerObjectId
-    principalType: kvPrincipalType
-    tags: union(commonTags, { workload: 'artifacts' })
-  }
-}
-
-// =============================================================================
 // Outputs
 // =============================================================================
 
@@ -832,7 +810,3 @@ output dc02PrivateIp string = dc02.outputs.privateIpAddress
 output vpnGatewayName string = !empty(vpnRootCertData) ? vpnGateway.outputs.vpnGatewayName : 'not-deployed'
 
 output deploymentTierDeployed int = deploymentTier
-
-output artifactsStorageAccount string = deployArtifacts ? artifactsStorage.outputs.storageAccountName : 'not-deployed'
-output artifactsFileShareName string = deployArtifacts ? artifactsStorage.outputs.fileShareName : 'not-deployed'
-output artifactsFileEndpoint string = deployArtifacts ? artifactsStorage.outputs.primaryFileEndpoint : 'not-deployed'

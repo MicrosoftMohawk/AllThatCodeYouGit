@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "3203480269282200017"
+      "templateHash": "2316761281548072475"
     }
   },
   "parameters": {
@@ -202,13 +202,6 @@
       "defaultValue": true,
       "metadata": {
         "description": "When true, SQL and MCM VMs are automatically domain-joined after deployment using the svc-domjoin service account."
-      }
-    },
-    "deployArtifacts": {
-      "type": "bool",
-      "defaultValue": false,
-      "metadata": {
-        "description": "When true, deploys an Azure Files storage account (100 GiB share) in rg-main for application ISOs, scripts, and other artifacts."
       }
     },
     "vmNameSqlCas": {
@@ -6697,203 +6690,6 @@
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc02')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]"
       ]
-    },
-    {
-      "condition": "[parameters('deployArtifacts')]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "deploy-artifacts-storage",
-      "resourceGroup": "[variables('rgMain')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "namePrefix": {
-            "value": "stgart"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "skuName": {
-            "value": "Standard_LRS"
-          },
-          "fileShareName": {
-            "value": "artifacts"
-          },
-          "fileShareQuotaGiB": {
-            "value": 100
-          },
-          "deployerObjectId": {
-            "value": "[parameters('deployerObjectId')]"
-          },
-          "principalType": {
-            "value": "[parameters('kvPrincipalType')]"
-          },
-          "tags": {
-            "value": "[union(variables('commonTags'), createObject('workload', 'artifacts'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "4313614499514512769"
-            }
-          },
-          "parameters": {
-            "namePrefix": {
-              "type": "string",
-              "metadata": {
-                "description": "Prefix for the storage account name (combined with uniqueString, max 24 chars)"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region for deployment"
-              }
-            },
-            "skuName": {
-              "type": "string",
-              "defaultValue": "Standard_LRS",
-              "allowedValues": [
-                "Standard_LRS",
-                "Standard_GRS",
-                "Standard_ZRS"
-              ],
-              "metadata": {
-                "description": "Storage account SKU"
-              }
-            },
-            "fileShareName": {
-              "type": "string",
-              "defaultValue": "artifacts",
-              "metadata": {
-                "description": "Name of the file share"
-              }
-            },
-            "fileShareQuotaGiB": {
-              "type": "int",
-              "defaultValue": 100,
-              "metadata": {
-                "description": "File share quota in GiB"
-              }
-            },
-            "deployerObjectId": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Entra ID object ID to grant Storage File Data SMB Share Elevated Contributor"
-              }
-            },
-            "principalType": {
-              "type": "string",
-              "defaultValue": "User",
-              "allowedValues": [
-                "User",
-                "Group"
-              ],
-              "metadata": {
-                "description": "Principal type for RBAC assignment: User or Group"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags to apply"
-              }
-            }
-          },
-          "variables": {
-            "uniqueSuffix": "[uniqueString(resourceGroup().id, parameters('namePrefix'))]",
-            "rawName": "[toLower(format('{0}{1}', parameters('namePrefix'), variables('uniqueSuffix')))]",
-            "storageAccountName": "[if(greater(length(variables('rawName')), 24), substring(variables('rawName'), 0, 24), variables('rawName'))]",
-            "smbShareElevatedContributorRoleId": "a7264617-510b-434b-a828-9731dc254ea7"
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Storage/storageAccounts",
-              "apiVersion": "2023-05-01",
-              "name": "[variables('storageAccountName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "kind": "StorageV2",
-              "sku": {
-                "name": "[parameters('skuName')]"
-              },
-              "properties": {
-                "supportsHttpsTrafficOnly": true,
-                "minimumTlsVersion": "TLS1_2",
-                "allowBlobPublicAccess": false,
-                "allowSharedKeyAccess": false,
-                "defaultToOAuthAuthentication": true
-              }
-            },
-            {
-              "condition": "[not(empty(parameters('deployerObjectId')))]",
-              "type": "Microsoft.Authorization/roleAssignments",
-              "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
-              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), parameters('deployerObjectId'), variables('smbShareElevatedContributorRoleId'))]",
-              "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('smbShareElevatedContributorRoleId'))]",
-                "principalId": "[parameters('deployerObjectId')]",
-                "principalType": "[parameters('principalType')]"
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
-              ]
-            },
-            {
-              "type": "Microsoft.Storage/storageAccounts/fileServices",
-              "apiVersion": "2023-05-01",
-              "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
-              "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
-              ]
-            },
-            {
-              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
-              "apiVersion": "2023-05-01",
-              "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', parameters('fileShareName'))]",
-              "properties": {
-                "shareQuota": "[parameters('fileShareQuotaGiB')]",
-                "enabledProtocols": "SMB"
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', variables('storageAccountName'), 'default')]"
-              ]
-            }
-          ],
-          "outputs": {
-            "storageAccountName": {
-              "type": "string",
-              "value": "[variables('storageAccountName')]"
-            },
-            "storageAccountId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
-            },
-            "fileShareName": {
-              "type": "string",
-              "value": "[parameters('fileShareName')]"
-            },
-            "primaryFileEndpoint": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-05-01').primaryEndpoints.file]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgMain'))]"
-      ]
     }
   ],
   "outputs": {
@@ -6942,18 +6738,6 @@
     "deploymentTierDeployed": {
       "type": "int",
       "value": "[parameters('deploymentTier')]"
-    },
-    "artifactsStorageAccount": {
-      "type": "string",
-      "value": "[if(parameters('deployArtifacts'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgMain')), 'Microsoft.Resources/deployments', 'deploy-artifacts-storage'), '2025-04-01').outputs.storageAccountName.value, 'not-deployed')]"
-    },
-    "artifactsFileShareName": {
-      "type": "string",
-      "value": "[if(parameters('deployArtifacts'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgMain')), 'Microsoft.Resources/deployments', 'deploy-artifacts-storage'), '2025-04-01').outputs.fileShareName.value, 'not-deployed')]"
-    },
-    "artifactsFileEndpoint": {
-      "type": "string",
-      "value": "[if(parameters('deployArtifacts'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgMain')), 'Microsoft.Resources/deployments', 'deploy-artifacts-storage'), '2025-04-01').outputs.primaryFileEndpoint.value, 'not-deployed')]"
     }
   }
 }

@@ -97,21 +97,58 @@ function Test-AzureCLI {
     return $false
 }
 
-# Function to check Azure CLI login status
+# Function to check Azure CLI login status and prompt to continue or re-login
 function Test-AzureLogin {
     try {
         $account = az account show 2>$null | ConvertFrom-Json
         if ($account) {
-            Write-Host "✓ Already logged in to Azure as: $($account.user.name)" -ForegroundColor Green
-            Write-Host "  Subscription: $($account.name) ($($account.id))" -ForegroundColor Cyan
-            return $true
+            # Verify the session token is still valid
+            $token = az account get-access-token 2>$null | ConvertFrom-Json
+            if (-not $token) {
+                Write-Host "⚠ Azure session has expired for: $($account.user.name)" -ForegroundColor Yellow
+                Write-Host "  A new login is required." -ForegroundColor Yellow
+                return $null
+            }
+
+            Write-Host "✓ Active Azure session detected" -ForegroundColor Green
+            Write-Host "  User:         $($account.user.name)" -ForegroundColor Cyan
+            Write-Host "  Subscription: $($account.name)" -ForegroundColor Cyan
+            Write-Host "  Tenant:       $($account.tenantId)" -ForegroundColor Cyan
+
+            Write-Host "`n  [1] Continue with current session" -ForegroundColor White
+            Write-Host "  [2] Log in with a different account" -ForegroundColor White
+
+            while ($true) {
+                $choice = Read-Host "`nEnter selection (1-2)"
+                switch ($choice) {
+                    '1' {
+                        Write-Host "✓ Continuing with current session" -ForegroundColor Green
+                        return $account
+                    }
+                    '2' {
+                        Write-Host "`nLogging in with a new account..." -ForegroundColor Yellow
+                        az login
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "✗ Failed to log in to Azure" -ForegroundColor Red
+                            return $null
+                        }
+                        $newAccount = az account show 2>$null | ConvertFrom-Json
+                        Write-Host "✓ Logged in as: $($newAccount.user.name)" -ForegroundColor Green
+                        return $newAccount
+                    }
+                    default {
+                        Write-Host "⚠ Invalid selection. Please enter 1 or 2." -ForegroundColor Yellow
+                    }
+                }
+            }
         }
     }
     catch {
-        Write-Host "✗ Not logged in to Azure" -ForegroundColor Red
-        return $false
+        # No active session
     }
-    return $false
+
+    Write-Host "✗ No active Azure session found" -ForegroundColor Red
+    return $null
 }
 
 # Function to check and configure preview extensions
@@ -317,7 +354,8 @@ if (-not (Test-AzureCLI)) {
 }
 
 # Step 2: Check login status
-if (-not (Test-AzureLogin)) {
+$loginResult = Test-AzureLogin
+if (-not $loginResult) {
     Write-Host "`nAttempting to log in to Azure..." -ForegroundColor Yellow
     az login
     if ($LASTEXITCODE -ne 0) {

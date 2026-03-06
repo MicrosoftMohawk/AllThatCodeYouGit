@@ -260,6 +260,7 @@ if ($DeploymentTier -ge 2) {
                 Write-Ok "Existing admin password retrieved from Key Vault (will reuse)."
             } else {
                 Write-Host "   WARNING: Could not retrieve admin password from Key Vault." -ForegroundColor Yellow
+                Write-Host "   Key Vault has no public endpoint. Connect via VPN for incremental deploys." -ForegroundColor Yellow
                 Write-Host "   A new password will be generated. DC extensions may re-run." -ForegroundColor Yellow
                 $ExistingAdminPassword = ''
             }
@@ -936,9 +937,10 @@ if ($DeploymentTier -ge 3) {
 
 Write-Host ""
 Write-Host "  Next Steps:" -ForegroundColor Cyan
-Write-Host "  1) Retrieve admin password from Key Vault:" -ForegroundColor White
+Write-Host "  1) Retrieve admin password from Key Vault (requires VPN):" -ForegroundColor White
 Write-Host "     az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv" -ForegroundColor Gray
 Write-Host "     (Find your KV name: az keyvault list --resource-group $BaseName-rg-identity --query [].name -o tsv)" -ForegroundColor Gray
+Write-Host "     NOTE: Key Vault has no public endpoint. You must be on VPN to access secrets." -ForegroundColor Yellow
 Write-Host "  2) Connect via Bastion: Portal > $BaseName-bastion > Connect to VM" -ForegroundColor White
 Write-Host "  3) Connect via VPN:" -ForegroundColor White
 Write-Host "     a) Download VPN client: Portal > $BaseName-vpngw > Point-to-site > Download VPN client" -ForegroundColor Gray

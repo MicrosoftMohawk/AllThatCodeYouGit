@@ -309,6 +309,21 @@ module keyVault 'modules/security/keyVault.bicep' = {
   }
 }
 
+// --- Key Vault Private Endpoint (disables public access) ---------------------
+
+module keyVaultPe 'modules/security/keyVaultPrivateEndpoint.bicep' = {
+  name: 'deploy-keyvault-pe'
+  scope: rgNet
+  params: {
+    keyVaultId: keyVault.outputs.keyVaultId
+    keyVaultName: keyVault.outputs.keyVaultName
+    subnetId: vnet.outputs.snetPeId
+    vnetId: vnet.outputs.vnetId
+    location: location
+    tags: union(commonTags, { workload: 'secrets' })
+  }
+}
+
 // --- Cloud Witness Storage Account -------------------------------------------
 
 module cloudWitness 'modules/storage/storageAccount.bicep' = {

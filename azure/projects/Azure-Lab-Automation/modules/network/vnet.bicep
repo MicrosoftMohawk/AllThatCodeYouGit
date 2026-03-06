@@ -33,6 +33,9 @@ param tags object = {}
 @description('Custom DNS server IP addresses for the VNet (e.g., DC static IPs). Leave empty to use Azure-provided DNS.')
 param dnsServers array = []
 
+@description('Private Endpoint subnet CIDR')
+param snetPePrefix string = '10.0.250.0/24'
+
 @description('GatewaySubnet CIDR for VPN Gateway (/27 minimum). Leave empty to skip.')
 param snetGatewayPrefix string = ''
 
@@ -332,6 +335,12 @@ var baseSubnets = [
       }
     }
   }
+  {
+    name: 'snet-pe'
+    properties: {
+      addressPrefix: snetPePrefix
+    }
+  }
 ]
 
 var gatewaySubnetEntry = !empty(snetGatewayPrefix) ? [
@@ -370,4 +379,5 @@ output snetAdId string = vnet.properties.subnets[1].id
 output snetMainId string = vnet.properties.subnets[2].id
 output snetSite1Id string = vnet.properties.subnets[3].id
 output snetSite2Id string = vnet.properties.subnets[4].id
-output snetGatewayId string = !empty(snetGatewayPrefix) ? vnet.properties.subnets[5].id : ''
+output snetPeId string = vnet.properties.subnets[5].id
+output snetGatewayId string = !empty(snetGatewayPrefix) ? vnet.properties.subnets[6].id : ''

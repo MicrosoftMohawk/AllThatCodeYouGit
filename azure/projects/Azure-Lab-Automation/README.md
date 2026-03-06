@@ -17,10 +17,15 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 │  └─────────────────────┘  └────────────────────────────────────────────┘ │
 │                                                                          │
 │  ┌─────────────────────┐  ┌────────────────────────────────────────────┐ │
-│  │ GatewaySubnet       │  │ P2S VPN Client Pool: 172.16.0.0/24        │ │
-│  │ 10.0.255.0/27       │  │   IKEv2 + SSTP — Certificate Auth          │ │
-│  │   VPN Gateway       │  │   Self-signed root + client cert           │ │
+│  │ GatewaySubnet       │  │ snet-pe (10.0.250.0/24)                   │ │
+│  │ 10.0.255.0/27       │  │   Key Vault PE    (+ future PEs)          │ │
+│  │   VPN Gateway       │  │                                            │ │
 │  └─────────────────────┘  └────────────────────────────────────────────┘ │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │ P2S VPN Client Pool: 172.16.0.0/24                                 │ │
+│  │   IKEv2 + SSTP — Certificate Auth  |  Self-signed root + client    │ │
+│  └─────────────────────────────────────────────────────────────────────┘ │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────────┐│
 │  │ snet-main (10.0.20.0/24)  — Main Site / HQ                         ││
@@ -140,7 +145,7 @@ The deployment uses a **tiered** approach so you can deploy incrementally:
 
 | Tier | What Gets Deployed | Use Case |
 |------|-------------------|----------|
-| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), Cloud Witness Storage, Key Vault, **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
+| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), Cloud Witness Storage, Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
 | **2** | + SQL VMs (with data disks), Availability Set, Internal Load Balancer. Standalone SQL VMs are skipped when `colocateSql` is true — only AOAG nodes are deployed. **Auto domain-join** SQL VMs (unless `joinDomain=false`). | Add SQL infrastructure |
 | **3** | + MCM Application VMs (CAS + 3 child primaries). When `colocateSql` is true, MCM VMs are upsized and get data disks for SQL. **Auto domain-join** MCM VMs (unless `joinDomain=false`). | Full lab deployment |
 
@@ -152,6 +157,7 @@ You can deploy Tier 1 first, then **incrementally** deploy Tier 2 or 3 later. Th
 
 - **Auto-detects** existing Tier 1 infrastructure (resource groups, Key Vault, DCs)
 - **Reuses** the admin password from Key Vault (prevents DC extension re-execution)
+  - **Note:** Key Vault has no public endpoint — connect via VPN before running incremental deploys
 - **Auto-detects** the AD domain name from DC01 (no need to re-enter it)
 - **Skips** Key Vault RBAC prompts on incremental runs
 - **Validates** the Azure CLI token before deployment (re-authenticates if expired)
@@ -302,7 +308,8 @@ Azure-Lab/
     ├── storage/
     │   └── storageAccount.bicep           # Cloud Witness storage account
     ├── security/
-    │   └── keyVault.bicep                 # Key Vault (password storage + RBAC assignment)
+    │   ├── keyVault.bicep                 # Key Vault (password storage + RBAC assignment)
+    │   └── keyVaultPrivateEndpoint.bicep   # Key Vault PE + private DNS zone
     └── identity/
         ├── promoteDC.bicep                # CSE: Promote DC01 as first DC (new forest)
         ├── configureAD.bicep              # RunCommand: OUs, groups, svc accounts, gMSA

@@ -39,6 +39,9 @@ param snetPePrefix string = '10.0.250.0/24'
 @description('GatewaySubnet CIDR for VPN Gateway (/27 minimum). Leave empty to skip.')
 param snetGatewayPrefix string = ''
 
+@description('Resource ID of the NAT Gateway for outbound internet. Leave empty to skip.')
+param natGatewayId string = ''
+
 // ---------------------------------------------------------------------------
 // NSG: AD Subnet
 // ---------------------------------------------------------------------------
@@ -306,6 +309,9 @@ var baseSubnets = [
       networkSecurityGroup: {
         id: nsgAd.id
       }
+      natGateway: !empty(natGatewayId) ? {
+        id: natGatewayId
+      } : null
     }
   }
   {
@@ -315,6 +321,9 @@ var baseSubnets = [
       networkSecurityGroup: {
         id: nsgMain.id
       }
+      natGateway: !empty(natGatewayId) ? {
+        id: natGatewayId
+      } : null
     }
   }
   {
@@ -324,6 +333,9 @@ var baseSubnets = [
       networkSecurityGroup: {
         id: nsgSite1.id
       }
+      natGateway: !empty(natGatewayId) ? {
+        id: natGatewayId
+      } : null
     }
   }
   {
@@ -333,6 +345,9 @@ var baseSubnets = [
       networkSecurityGroup: {
         id: nsgSite2.id
       }
+      natGateway: !empty(natGatewayId) ? {
+        id: natGatewayId
+      } : null
     }
   }
   {

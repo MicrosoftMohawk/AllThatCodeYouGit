@@ -1,0 +1,116 @@
+<#
+.SYNOPSIS
+    Register an Azure Storage Account as a computer object in on-premises AD.
+    This enables Kerberos-based SMB authentication for domain-joined clients.
+
+.DESCRIPTION
+    Creates (or updates) a computer account in Active Directory that represents
+    the Azure Storage account.  Sets the computer password to the storage
+    account's Kerberos key so Azure can validate Kerberos tickets issued by
+    the on-premises DC.
+
+    This script is designed to run on a Domain Controller via
+    'az vm run-command invoke'.  deploy.ps1 calls it automatically.
+
+.PARAMETER StorageAccountName
+    Name of the Azure Storage account (e.g., artifactsstgujl67iqq77x6).
+
+.PARAMETER StorageKerbKey
+    Base64-encoded Kerberos key (kerb1) from the storage account.
+    Passed as a protectedParameter from deploy.ps1.
+
+.PARAMETER DomainName
+    FQDN of the AD domain (e.g., azlab.local).
+
+.PARAMETER OUPath
+    Distinguished Name of the OU to create the computer account in.
+    Default: CN=Computers,<domain DN>
+
+.NOTES
+    Outputs a JSON object with domainGuid, domainSid, azureStorageSid, and
+    netBiosDomainName for consumption by deploy.ps1.
+#>
+
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$StorageAccountName,
+
+    [Parameter(Mandatory = $true)]
+    [string]$StorageKerbKey,
+
+    [Parameter(Mandatory = $true)]
+    [string]$DomainName,
+
+    [string]$OUPath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+
+Import-Module ActiveDirectory
+
+# ── Derive values ─────────────────────────────────────────────────────────────
+$domain = Get-ADDomain -Identity $DomainName
+$domainGuid = $domain.ObjectGuid.ToString()
+$domainSid = $domain.DomainSID.Value
+$forestName = $domain.Forest
+$netBios = $domain.NetBIOSName
+
+# SAM account name: max 15 chars + trailing $
+$samName = if ($StorageAccountName.Length -gt 15) {
+    $StorageAccountName.Substring(0, 15)
+} else {
+    $StorageAccountName
+}
+
+# SPN for Azure Files SMB
+$spn = "cifs/$StorageAccountName.file.core.windows.net"
+
+# OU — default to CN=Computers if not specified
+if ([string]::IsNullOrWhiteSpace($OUPath)) {
+    $OUPath = "CN=Computers,$($domain.DistinguishedName)"
+}
+
+# Convert the storage Kerberos key to a SecureString password
+$kerbBytes = [System.Convert]::FromBase64String($StorageKerbKey)
+$kerbPassword = [System.Text.Encoding]::Unicode.GetString($kerbBytes)
+$securePassword = ConvertTo-SecureString -String $kerbPassword -AsPlainText -Force
+
+# ── Create or update the computer account ─────────────────────────────────────
+$existingComputer = Get-ADComputer -Filter "SamAccountName -eq '$samName$'" -ErrorAction SilentlyContinue
+
+if ($existingComputer) {
+    Write-Host "Computer account '$samName' already exists — updating password and SPN."
+    Set-ADAccountPassword -Identity $existingComputer -Reset -NewPassword $securePassword
+    Set-ADComputer -Identity $existingComputer -ServicePrincipalNames @{Replace = @($spn)}
+    $computer = Get-ADComputer -Identity $existingComputer -Properties SID
+} else {
+    Write-Host "Creating computer account '$samName' in $OUPath"
+    New-ADComputer `
+        -Name $samName `
+        -SamAccountName "$samName$" `
+        -Path $OUPath `
+        -ServicePrincipalNames @($spn) `
+        -AccountPassword $securePassword `
+        -Enabled $true `
+        -Description "Azure Storage account for Azure Files SMB — $StorageAccountName"
+
+    $computer = Get-ADComputer -Identity $samName -Properties SID
+}
+
+# Ensure Kerberos AES256 encryption is enabled
+Set-ADComputer -Identity $computer -KerberosEncryptionType 'AES256'
+
+$azureStorageSid = $computer.SID.Value
+
+# ── Output results as JSON ────────────────────────────────────────────────────
+$result = @{
+    domainGuid        = $domainGuid
+    domainSid         = $domainSid
+    forestName        = $forestName
+    netBiosDomainName = $netBios
+    azureStorageSid   = $azureStorageSid
+    computerName      = $samName
+    spn               = $spn
+} | ConvertTo-Json -Compress
+
+Write-Host "AD_REGISTRATION_RESULT=$result"

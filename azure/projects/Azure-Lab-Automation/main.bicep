@@ -247,6 +247,16 @@ resource rgSite2Res 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 
 // --- VNet & Subnets ----------------------------------------------------------
 
+module natGateway 'modules/network/natGateway.bicep' = {
+  name: 'deploy-natgw'
+  scope: rgNet
+  params: {
+    natGatewayName: '${baseName}-natgw'
+    location: location
+    tags: union(commonTags, { workload: 'network' })
+  }
+}
+
 module vnet 'modules/network/vnet.bicep' = {
   name: 'deploy-vnet'
   scope: rgNet
@@ -260,6 +270,7 @@ module vnet 'modules/network/vnet.bicep' = {
     snetSite1Prefix: snetSite1Prefix
     snetSite2Prefix: snetSite2Prefix
     snetGatewayPrefix: snetGatewayPrefix
+    natGatewayId: natGateway.outputs.natGatewayId
     dnsServers: [dc01Ip, dc02Ip]
     tags: union(commonTags, { workload: 'network' })
   }

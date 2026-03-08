@@ -1,7 +1,8 @@
 // ============================================================================
 // Module: Storage Account with Azure Files Share
-// Deploys a locked-down storage account (Entra ID only, no public access)
-// with a single Azure Files share for artifact storage.
+// Deploys a locked-down storage account with a single Azure Files share for
+// artifact storage.  Supports optional on-premises AD DS authentication for
+// Kerberos-based SMB access from domain-joined VMs.
 // ============================================================================
 
 @description('Globally unique storage account name')
@@ -18,6 +19,35 @@ param shareQuotaGiB int = 100
 
 @description('Tags')
 param tags object = {}
+
+// ---------------------------------------------------------------------------
+// AD DS Identity-Based Authentication (optional)
+// When enabled, domain-joined VMs can mount the share via Kerberos.
+// The storage account is registered as a computer account in AD and the
+// properties below are populated by deploy.ps1 after running the AD
+// registration script on the domain controller.
+// ---------------------------------------------------------------------------
+
+@description('Enable on-premises AD DS authentication for SMB file shares')
+param enableADDS bool = false
+
+@description('AD domain FQDN (e.g., azlab.local)')
+param adDomainName string = ''
+
+@description('AD NetBIOS domain name (e.g., AZLAB)')
+param adNetBiosDomainName string = ''
+
+@description('AD forest name (e.g., azlab.local)')
+param adForestName string = ''
+
+@description('AD domain GUID')
+param adDomainGuid string = ''
+
+@description('AD domain SID (e.g., S-1-5-21-...)')
+param adDomainSid string = ''
+
+@description('SID of the computer account created in AD for this storage account')
+param adAzureStorageSid string = ''
 
 // ---------------------------------------------------------------------------
 // Storage Account — fully locked down
@@ -41,6 +71,18 @@ resource stg 'Microsoft.Storage/storageAccounts@2023-05-01' = {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
     }
+    azureFilesIdentityBasedAuthentication: enableADDS ? {
+      directoryServiceOptions: 'AD'
+      activeDirectoryProperties: {
+        domainName: adDomainName
+        netBiosDomainName: adNetBiosDomainName
+        forestName: adForestName
+        domainGuid: adDomainGuid
+        domainSid: adDomainSid
+        azureStorageSid: adAzureStorageSid
+      }
+      defaultSharePermission: 'StorageFileDataSmbShareContributor'
+    } : null
   }
 }
 

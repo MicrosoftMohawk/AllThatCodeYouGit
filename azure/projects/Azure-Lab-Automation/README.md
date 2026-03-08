@@ -230,7 +230,7 @@ The script will:
 - Display an **interactive naming table** for MCM/SQL servers — accept defaults or customize
 - Offer the option to **colocate SQL on MCM servers** (or pass `-ColocateSql`)
 - Prompt to **domain-join** SQL and MCM VMs (default: yes) — or pass `-SkipDomainJoin`
-- Generate self-signed root CA + client certificates for VPN (P2S)
+- Check the personal certificate store for existing VPN certs (by BaseName); generate new ones if not found
 - Refresh the Azure CLI token before deploying
 - Execute the deployment
 - **Post-deployment**: Set VM timezone via RunCommand (`Set-TimeZone`) on all deployed VMs
@@ -287,12 +287,13 @@ Azure-Lab/
 ├── README.md                              # This file
 ├── deploy.ps1                             # PowerShell wrapper (prereqs, incremental detection, naming, deploy)
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
+├── Set-VpnDnsConfig.ps1                   # Helper: configure DNS NRPT rules for VPN private endpoint access
 ├── main.bicep                             # Subscription-scoped orchestrator
 ├── bicepconfig.json                       # Bicep linter / analyzer config
 ├── MECM-Azure-Global-Lab.ps1              # Original PowerShell script (reference)
 ├── certs/                                 # Auto-generated VPN certificates
-│   ├── P2SRootCert.cer                    # Root CA public key (reused on redeploy)
-│   ├── P2SClientCert.pfx                  # Client cert (password = admin password)
+│   ├── P2SRootCert.cer                    # Root CA public key (re-exported every deploy)
+│   ├── P2SClientCert.pfx                  # Client cert (re-exported with current admin password)
 │   └── vpn-client/                        # Downloaded VPN client config (from helper script)
 ├── parameters/
 │   └── main.bicepparam                    # Default parameter values (for direct az CLI use)
@@ -398,7 +399,7 @@ After infrastructure deployment, the following manual configuration is required:
 ### 1b. Connect via P2S VPN (Deploying Machine)
 The VPN Gateway takes **25–45 minutes** to provision after deployment starts.
 1. **Download VPN client config**: Portal → `{baseName}-vpngw` → Point-to-site configuration → Download VPN client
-2. **Client cert**: Already installed in `CurrentUser\My` during deployment (auto-generated)
+2. **Client cert**: Already installed in `CurrentUser\My` during deployment (looked up by BaseName or auto-generated)
 3. **Root cert**: Added to `CurrentUser\Trusted Root Certification Authorities` automatically
 4. **Connect**: Extract the downloaded ZIP, run the VPN client configuration, then connect via Windows VPN settings
 5. **VPN address**: Your workstation will receive a `172.16.0.x` IP with full access to the `10.0.0.0/16` lab network
@@ -424,6 +425,45 @@ To connect from a workstation that was **not** used to run `deploy.ps1`, use the
 5. **Without Az CLI**: Use `-SkipVpnClientDownload` and download the VPN client manually from the Azure Portal
 
 > **Tip:** You can connect multiple machines — just copy the `certs/` folder and run `Install-VpnCerts.ps1` on each one.
+
+### 1d. VPN DNS Configuration (Private Endpoints)
+
+When connected to the P2S VPN, your workstation may still use its **local DNS** (e.g., your home router) instead of the Azure DCs. This causes private endpoint resolution to fail — resources like Key Vault return public IPs, and you get:
+
+> _"Public network access is disabled and request is not from a trusted service nor via an approved private link"_
+
+This happens because Windows routes DNS queries through the network adapter with the **lowest interface metric**, which is typically your local Ethernet/Wi-Fi — not the VPN adapter.
+
+The `Set-VpnDnsConfig.ps1` script solves this by managing **NRPT (Name Resolution Policy Table)** rules that route Azure Private DNS zone queries through the lab's Domain Controllers. A scheduled task automatically adds/removes these rules on VPN connect/disconnect.
+
+**Install (one-time, requires Admin PowerShell):**
+```powershell
+.\Set-VpnDnsConfig.ps1 -Action Install -BaseName tst10
+```
+
+This will:
+- Add NRPT rules for Azure Private DNS zones (`*.vault.azure.net`, `*.blob.core.windows.net`, etc.) pointing to the lab DCs (`10.0.1.4`, `10.0.1.5`)
+- Create a scheduled task that **automatically** adds the rules on VPN connect and removes them on disconnect
+- Rules are scoped — only private endpoint DNS zones are redirected; all other DNS continues through your normal resolver
+
+**Verify it's working:**
+```powershell
+# Resolve-DnsName respects NRPT rules (nslookup does NOT)
+Resolve-DnsName {baseName}-kv-*.vault.azure.net
+# Should return a 10.0.250.x address (private endpoint IP), not a public IP
+```
+
+**Uninstall:**
+```powershell
+.\Set-VpnDnsConfig.ps1 -Action Uninstall -BaseName tst10
+```
+
+**Custom DNS servers:** If your DCs use non-default IPs:
+```powershell
+.\Set-VpnDnsConfig.ps1 -Action Install -BaseName mylab -DnsServers 10.0.1.10,10.0.1.11
+```
+
+> **Note:** `nslookup` bypasses NRPT rules and always queries the adapter's DNS server directly. Use `Resolve-DnsName` to verify NRPT-based resolution. Applications (browsers, Az CLI, PowerShell modules) all use the NRPT path.
 
 ### 2. Active Directory (Automated)
 AD DS is automatically configured during Tier 1 deployment:
@@ -577,6 +617,7 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 | **VPN Gateway still provisioning** | VPN Gateways take 25–45 minutes. Check status: Portal → `{base}-vpngw` → Overview |
 | **VPN client can't connect** | Verify client cert is in `CurrentUser\My` and root cert is in `CurrentUser\Trusted Root`. Re-download VPN client config. |
 | **VPN connected but can't reach VMs** | Ensure VPN client address pool (`172.16.0.0/24`) doesn't overlap with your local network. Check NSG rules allow traffic. |
+| **VPN connected but private endpoints fail** | Your local DNS resolves to public IPs. Run `Set-VpnDnsConfig.ps1 -Action Install -BaseName {base}` in Admin PowerShell. Verify with `Resolve-DnsName` (not `nslookup`). See [1d. VPN DNS Configuration](#1d-vpn-dns-configuration-private-endpoints). |
 | **Key Vault access denied** | Ensure your Entra ID user/group was assigned during deployment, or add manually: Portal → Key Vault → Access control (IAM) |
 | **AD DS promotion timeout** | Check `C:\WindowsTemp\PromoteDC1.log` or `ReplicaDC.log` on the DC VM |
 | **AD configuration failure** | Check `C:\WindowsTemp\ConfigureAD.log` on DC01. RunCommand has 900s timeout. |

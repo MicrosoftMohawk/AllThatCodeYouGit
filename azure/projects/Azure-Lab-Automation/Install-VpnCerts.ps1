@@ -129,6 +129,10 @@ try {
 } catch {
     Write-Err "Failed to import client PFX: $_"
     Write-Host "   Verify the PFX password is correct." -ForegroundColor Yellow
+    Write-Host "   If an incremental deploy regenerated the admin password (Key Vault was" -ForegroundColor Yellow
+    Write-Host "   unreachable behind its private endpoint), the PFX on disk may have been" -ForegroundColor Yellow
+    Write-Host "   re-exported with the new password. Re-run deploy.ps1 on the original" -ForegroundColor Yellow
+    Write-Host "   machine and copy the updated certs/ folder to this workstation." -ForegroundColor Yellow
     exit 1
 }
 

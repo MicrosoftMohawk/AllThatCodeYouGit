@@ -2,8 +2,9 @@
 // Artifacts Storage — Standalone File Share for Lab Assets
 //
 // Deploys a locked-down Azure Storage Account with an Azure Files share for
-// storing lab artifacts (ISOs, installers, config files).  Access is Entra ID
-// RBAC only — no shared keys, no SAS tokens, no AD DS integration.
+// storing lab artifacts (ISOs, installers, config files).  Supports on-premises
+// AD DS authentication for Kerberos-based SMB access from domain-joined VMs.
+// No shared keys, no SAS tokens.
 //
 // The storage account is fully private (no public network access).  A Private
 // Endpoint and Private DNS Zone are deployed so the share is reachable from
@@ -50,6 +51,29 @@ param shareQuotaGiB int = 100
 @description('Tags applied to all resources')
 param tags object = {}
 
+// --- AD DS Identity-Based Authentication (populated by deploy.ps1 post-deploy) ---
+
+@description('Enable on-premises AD DS authentication for SMB file shares')
+param enableADDS bool = false
+
+@description('AD domain FQDN (e.g., azlab.local)')
+param adDomainName string = ''
+
+@description('AD NetBIOS domain name (e.g., AZLAB)')
+param adNetBiosDomainName string = ''
+
+@description('AD forest name (e.g., azlab.local)')
+param adForestName string = ''
+
+@description('AD domain GUID')
+param adDomainGuid string = ''
+
+@description('AD domain SID')
+param adDomainSid string = ''
+
+@description('SID of the computer account created in AD for this storage account')
+param adAzureStorageSid string = ''
+
 // =============================================================================
 // Variables
 // =============================================================================
@@ -91,6 +115,13 @@ module storage 'modules/storageAccount.bicep' = {
     shareName: shareName
     shareQuotaGiB: shareQuotaGiB
     tags: commonTags
+    enableADDS: enableADDS
+    adDomainName: adDomainName
+    adNetBiosDomainName: adNetBiosDomainName
+    adForestName: adForestName
+    adDomainGuid: adDomainGuid
+    adDomainSid: adDomainSid
+    adAzureStorageSid: adAzureStorageSid
   }
 }
 

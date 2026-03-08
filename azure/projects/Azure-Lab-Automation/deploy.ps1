@@ -379,13 +379,141 @@ if ($Destroy) {
         exit 0
     }
 
-    foreach ($rg in $existingRgs) {
+    # ── Clean up cross-RG dependencies in snet-pe ────────────────────────────
+    # Other deployments (e.g., ArtifactsStorage) may have Private Endpoints
+    # and DNS VNet links that reference the lab VNet.  These must be removed
+    # before the lab's network RG can be deleted.
+    # ─────────────────────────────────────────────────────────────────────────
+    $networkRg = "$BaseName-rg-network"
+    $labVnetName = "$BaseName-vnet"
+    if ($existingRgs -contains $networkRg) {
+        Write-Step "Checking for cross-resource-group dependencies in the lab VNet..."
+
+        # Find Private Endpoints whose NIC lives in a different RG (e.g., artifacts-rg-artifacts)
+        $peSubnetId = az network vnet subnet show `
+            -g $networkRg --vnet-name $labVnetName -n snet-pe `
+            --query id -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($peSubnetId)) {
+            $peJsonRaw = az network private-endpoint list `
+                --query "[?subnet.id=='$($peSubnetId.Trim())' && !starts_with(resourceGroup, '$BaseName')].{name:name, rg:resourceGroup, id:id}" `
+                -o json 2>&1
+            $externalPEs = $null
+            if ($LASTEXITCODE -eq 0) {
+                try { $externalPEs = $peJsonRaw | ConvertFrom-Json } catch { $externalPEs = $null }
+            }
+
+            if ($externalPEs -and $externalPEs.Count -gt 0) {
+                Write-Host "   Found $($externalPEs.Count) Private Endpoint(s) from other deployments in snet-pe:" -ForegroundColor Yellow
+                foreach ($extPe in $externalPEs) {
+                    Write-Host "     - $($extPe.name) (RG: $($extPe.rg))" -ForegroundColor Yellow
+                }
+                Write-Host ""
+                Write-Host "   These must be deleted first, or lab VNet deletion will fail." -ForegroundColor Yellow
+                Write-Host "   [1] Delete them now and continue (recommended)" -ForegroundColor White
+                Write-Host "   [2] Skip — I'll clean them up manually" -ForegroundColor White
+                $peChoice = Read-Host "   Select (default: 1)"
+                if ($peChoice -ne '2') {
+                    foreach ($extPe in $externalPEs) {
+                        Write-Host "   Deleting PE: $($extPe.name) in $($extPe.rg)..." -ForegroundColor Gray
+                        az network private-endpoint delete --ids $extPe.id -o none 2>&1
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Fail "Failed to delete $($extPe.name). You may need to delete its resource group first."
+                        } else {
+                            Write-Ok "Deleted $($extPe.name)"
+                        }
+                    }
+                }
+            }
+        }
+
+        # Find Private DNS Zone VNet links that reference the lab VNet from other RGs
+        $labVnetId = az network vnet show -g $networkRg -n $labVnetName --query id -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($labVnetId)) {
+            $labVnetId = $labVnetId.Trim()
+
+            # Check known privatelink DNS zones that may have been created by add-on projects
+            $dnsZoneNames = @(
+                'privatelink.file.core.windows.net'
+                'privatelink.blob.core.windows.net'
+                'privatelink.table.core.windows.net'
+                'privatelink.queue.core.windows.net'
+            )
+            foreach ($zoneName in $dnsZoneNames) {
+                # Search for DNS zones with VNet links to our VNet in the lab's network RG
+                $zoneJsonRaw = az network private-dns link vnet list `
+                    --zone-name $zoneName `
+                    --resource-group "$BaseName-rg-network" `
+                    --query "[?virtualNetwork.id=='$labVnetId']" `
+                    -o json 2>&1
+                $zoneLinks = $null
+                if ($LASTEXITCODE -eq 0) {
+                    try { $zoneLinks = $zoneJsonRaw | ConvertFrom-Json } catch { $zoneLinks = $null }
+                }
+
+                if (-not $zoneLinks -or $zoneLinks.Count -eq 0) {
+                    # Also check common add-on RG naming patterns
+                    $addOnRgs = az group list --query "[?!starts_with(name, '$BaseName') && contains(name, 'artifacts')].name" -o tsv 2>&1
+                    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($addOnRgs)) {
+                        foreach ($addOnRg in ($addOnRgs -split "`n" | Where-Object { $_ })) {
+                            $addOnRg = $addOnRg.Trim()
+                            $linksJsonRaw = az network private-dns link vnet list `
+                                --zone-name $zoneName `
+                                --resource-group $addOnRg `
+                                --query "[?virtualNetwork.id=='$labVnetId'].{name:name, zone:split(id,'/')[8]}" `
+                                -o json 2>&1
+                            $links = $null
+                            if ($LASTEXITCODE -eq 0) {
+                                try { $links = $linksJsonRaw | ConvertFrom-Json } catch { $links = $null }
+                            }
+                            if ($links -and $links.Count -gt 0) {
+                                foreach ($link in $links) {
+                                    Write-Host "   Removing DNS VNet link '$($link.name)' from zone '$zoneName' in RG '$addOnRg'..." -ForegroundColor Gray
+                                    az network private-dns link vnet delete `
+                                        --name $link.name `
+                                        --zone-name $zoneName `
+                                        --resource-group $addOnRg `
+                                        --yes -o none 2>&1
+                                    if ($LASTEXITCODE -eq 0) {
+                                        Write-Ok "Removed DNS link: $($link.name)"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # Delete non-network RGs first (async), then network RG last (sync)
+    # so VNet/subnet deletion waits for dependent NIC cleanups to complete.
+    $nonNetworkRgs = $existingRgs | Where-Object { $_ -ne $networkRg }
+    $hasNetworkRg = $existingRgs -contains $networkRg
+
+    foreach ($rg in $nonNetworkRgs) {
         Write-Step "Deleting resource group: $rg"
         az group delete --name $rg --yes --no-wait
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "Failed to initiate deletion for $rg"
         } else {
             Write-Ok "Deletion initiated for $rg (running in background)"
+        }
+    }
+
+    if ($hasNetworkRg) {
+        if ($nonNetworkRgs.Count -gt 0) {
+            Write-Step "Waiting for non-network resource groups to finish deleting..."
+            foreach ($rg in $nonNetworkRgs) {
+                az group wait --name $rg --deleted --timeout 600 2>&1 | Out-Null
+            }
+            Write-Ok "Non-network resource groups deleted"
+        }
+        Write-Step "Deleting network resource group: $networkRg"
+        az group delete --name $networkRg --yes --no-wait
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Failed to initiate deletion for $networkRg"
+        } else {
+            Write-Ok "Deletion initiated for $networkRg (running in background)"
         }
     }
 
@@ -627,25 +755,40 @@ if (-not $SkipDomainJoin) {
 # =============================================================================
 # 3b. VPN Gateway — Self-Signed Certificate for P2S
 # =============================================================================
+# Cert lookup is store-based: we search CurrentUser\My for certs whose Subject
+# CN matches the deployment BaseName.  This means incremental deploys (even from
+# the same machine with a regenerated admin password) always re-export the PFX
+# with the *current* password, eliminating the password-desync problem that
+# occurs when Key Vault is unreachable behind its private endpoint.
+# =============================================================================
 Write-Step "VPN Gateway P2S certificate setup..."
 $CertDir = Join-Path $ScriptRoot 'certs'
 $RootCertPath = Join-Path $CertDir 'P2SRootCert.cer'
 $ClientPfxPath = Join-Path $CertDir 'P2SClientCert.pfx'
 
-if (Test-Path $RootCertPath) {
-    Write-Ok "Existing root certificate found: $RootCertPath"
-    $rootCertBase64 = Get-Content $RootCertPath -Raw
-    # Strip PEM headers/footers and whitespace
-    $rootCertBase64 = ($rootCertBase64 -replace '-----BEGIN CERTIFICATE-----' -replace '-----END CERTIFICATE-----').Trim() -replace '\r?\n',''
+# --- Step 1: Search the personal certificate store for existing certs --------
+$rootCertSubject  = "CN=P2SRootCert-$BaseName"
+$clientCertSubject = "CN=P2SClientCert-$BaseName"
+
+$rootCert = Get-ChildItem -Path 'Cert:\CurrentUser\My' |
+    Where-Object { $_.Subject -eq $rootCertSubject } |
+    Sort-Object NotAfter -Descending | Select-Object -First 1
+
+$clientCert = Get-ChildItem -Path 'Cert:\CurrentUser\My' |
+    Where-Object { $_.Subject -eq $clientCertSubject } |
+    Sort-Object NotAfter -Descending | Select-Object -First 1
+
+if ($rootCert -and $clientCert) {
+    # --- Reuse existing certs from the personal store -------------------------
+    Write-Ok "Root cert found in store: $($rootCert.Subject) (Thumbprint: $($rootCert.Thumbprint), Expires: $($rootCert.NotAfter.ToString('yyyy-MM-dd')))"
+    Write-Ok "Client cert found in store: $($clientCert.Subject) (Thumbprint: $($clientCert.Thumbprint), Expires: $($clientCert.NotAfter.ToString('yyyy-MM-dd')))"
 } else {
+    # --- Create new certs (fresh deploy or different workstation) --------------
     Write-Host "   Generating self-signed root CA and client certificate..." -ForegroundColor Yellow
 
-    if (-not (Test-Path $CertDir)) { New-Item -Path $CertDir -ItemType Directory -Force | Out-Null }
-
-    # Create Root CA cert (self-signed, in CurrentUser\My)
     $rootCert = New-SelfSignedCertificate `
         -Type Custom `
-        -Subject "CN=P2SRootCert-$BaseName" `
+        -Subject $rootCertSubject `
         -KeySpec Signature `
         -KeyExportPolicy Exportable `
         -KeyLength 2048 `
@@ -657,10 +800,9 @@ if (Test-Path $RootCertPath) {
 
     Write-Ok "Root CA created: $($rootCert.Subject) (Thumbprint: $($rootCert.Thumbprint))"
 
-    # Create Client cert signed by root
     $clientCert = New-SelfSignedCertificate `
         -Type Custom `
-        -Subject "CN=P2SClientCert-$BaseName" `
+        -Subject $clientCertSubject `
         -KeySpec Signature `
         -KeyExportPolicy Exportable `
         -KeyLength 2048 `
@@ -670,28 +812,39 @@ if (Test-Path $RootCertPath) {
         -NotAfter (Get-Date).AddYears(3)
 
     Write-Ok "Client cert created: $($clientCert.Subject) (Thumbprint: $($clientCert.Thumbprint))"
+}
 
-    # Export root cert public key as Base64 .cer
-    $rootDer = $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-    $rootCertBase64 = [Convert]::ToBase64String($rootDer)
-    $rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICATE-----"
-    Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
-    Write-Ok "Root cert exported: $RootCertPath"
+# --- Step 2: Always (re-)export cert files with the current admin password ---
+# This ensures the PFX password always matches the admin password that will be
+# stored in Key Vault, regardless of whether it was reused or regenerated.
+if (-not (Test-Path $CertDir)) { New-Item -Path $CertDir -ItemType Directory -Force | Out-Null }
 
-    # Export client cert as PFX (protected with admin password)
-    $pfxPwd = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
-    Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath -Password $pfxPwd | Out-Null
-    Write-Ok "Client PFX exported: $ClientPfxPath (password = admin password in Key Vault)"
+# Export root cert public key as Base64 .cer
+$rootDer = $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+$rootCertBase64 = [Convert]::ToBase64String($rootDer)
+$rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICATE-----"
+Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
+Write-Ok "Root cert exported: $RootCertPath"
 
-    # Add root cert to Trusted Root store (CurrentUser) so VPN client trusts it
-    $trustedStore = New-Object System.Security.Cryptography.X509Certificates.X509Store(
-        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-    $trustedStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+# Export client cert as PFX (TripleDES_SHA1 for cross-OS compatibility)
+$pfxPwd = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
+Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
+    -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+Write-Ok "Client PFX exported: $ClientPfxPath (password = admin password in Key Vault)"
+
+# --- Step 3: Ensure root cert is in Trusted Root CAs ------------------------
+$trustedStore = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+    [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+    [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+$trustedStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+$existingRoot = $trustedStore.Certificates | Where-Object { $_.Thumbprint -eq $rootCert.Thumbprint }
+if ($existingRoot) {
+    Write-Ok "Root cert already in Trusted Root (Thumbprint: $($rootCert.Thumbprint))"
+} else {
     $trustedStore.Add($rootCert)
-    $trustedStore.Close()
     Write-Ok "Root cert added to CurrentUser\\Trusted Root Certification Authorities"
 }
+$trustedStore.Close()
 
 $VpnRootCertData = $rootCertBase64
 

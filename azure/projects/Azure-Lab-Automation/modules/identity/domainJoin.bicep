@@ -4,6 +4,11 @@
 // Uses the JsonADDomainExtension (Microsoft.Compute.JsonADDomainExtension)
 // to join the target VM to the specified AD domain.
 //
+// A RunCommand-based DNS readiness check runs first, clearing the DNS client
+// cache and polling for the domain's SRV records. This prevents the common
+// Azure timing issue where member VMs cannot yet reach the DC's DNS service
+// even though the DCs are fully promoted.
+//
 // Prerequisites:
 //   - The domain must be reachable from the VM's subnet (VNet DNS set to DCs).
 //   - The join credential must have permission to create computer objects
@@ -41,10 +46,61 @@ param tags object = {}
 // Combined = 3
 var domainJoinOptions = 3
 
+// ---------------------------------------------------------------------------
+// Step 1 — DNS Readiness Check (RunCommand)
+// Flush the local DNS cache and poll until the domain's LDAP SRV record is
+// resolvable. Retries up to 30 times (10 s apart ≈ 5 min) before failing.
+// ---------------------------------------------------------------------------
+resource dnsReadyCheck 'Microsoft.Compute/virtualMachines/runCommands@2024-03-01' = {
+  name: '${vmName}/DnsReadyCheck'
+  location: location
+  tags: tags
+  properties: {
+    asyncExecution: false
+    timeoutInSeconds: 600
+    source: {
+      script: '''
+        param([string]$DomainName)
+
+        $srvTarget = "_ldap._tcp.dc._msdcs.$DomainName"
+        $maxAttempts = 30
+        $sleepSec    = 10
+
+        Write-Output "Validating DNS resolution for domain: $DomainName"
+        Write-Output "Looking up SRV record: $srvTarget"
+
+        for ($i = 1; $i -le $maxAttempts; $i++) {
+            Clear-DnsClientCache
+            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue
+            if ($srv) {
+                Write-Output "DNS ready on attempt $i — found DC: $($srv[0].NameTarget)"
+                exit 0
+            }
+            Write-Output "Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s..."
+            Start-Sleep -Seconds $sleepSec
+        }
+
+        throw "DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget"
+      '''
+    }
+    parameters: [
+      {
+        name: 'DomainName'
+        value: domainName
+      }
+    ]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 2 — Domain Join Extension
+// Runs only after the DNS readiness check succeeds.
+// ---------------------------------------------------------------------------
 resource domainJoinExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' = {
   name: '${vmName}/JoinDomain'
   location: location
   tags: tags
+  dependsOn: [dnsReadyCheck]
   properties: {
     publisher: 'Microsoft.Compute'
     type: 'JsonADDomainExtension'

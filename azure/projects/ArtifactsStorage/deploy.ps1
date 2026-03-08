@@ -5,12 +5,14 @@
 
 .DESCRIPTION
     Deploys a locked-down Azure Storage Account with:
-      - Azure Files share (SMB, Entra ID RBAC only)
+      - Azure Files share (SMB, AD DS Kerberos + Entra ID OAuth)
       - Private Endpoint + Private DNS Zone (no public access)
       - RBAC assignment for the deploying user/group
+      - On-premises AD DS registration for Kerberos SMB from domain-joined VMs
 
-    The share is accessible from any VNet-connected client (P2S VPN, Bastion,
-    or peered VNets) using Entra ID credentials.  No shared keys or SAS tokens.
+    The share is accessible from domain-joined VMs via Kerberos SMB mount,
+    and from VPN workstations via az CLI (OAuth, supports MFA/passkey).
+    No shared keys or SAS tokens.
 
 .PARAMETER NamePrefix
     Base name prefix for all resources (max 10 chars).
@@ -35,6 +37,15 @@
 
 .PARAMETER SubscriptionId
     Target subscription ID.  If not set, uses current az CLI default.
+
+.PARAMETER SkipADDS
+    Skip the AD DS registration step.  Useful for redeploying infrastructure
+    without re-running the AD registration (e.g., if already registered).
+
+.PARAMETER DomainName
+    FQDN of the lab AD domain.  Default: <LabBaseName>.local (e.g., tst10.local
+    becomes azlab.local — override if your domain name differs from the lab
+    base name).  Auto-derived from LabBaseName if not specified.
 
 .PARAMETER Destroy
     Remove the artifacts resource group and all resources.
@@ -70,6 +81,10 @@ param(
     [int]$ShareQuotaGiB = 100,
 
     [string]$SubscriptionId,
+
+    [switch]$SkipADDS,
+
+    [string]$DomainName,
 
     [switch]$Destroy
 )
@@ -347,7 +362,7 @@ if ($LASTEXITCODE -ne 0) {
 # =============================================================================
 # 6. Post-Deployment Summary
 # =============================================================================
-Write-Header "Deployment Complete!"
+Write-Header "Bicep Deployment Complete!"
 Write-Host ""
 
 # Retrieve outputs
@@ -359,19 +374,180 @@ $rgName      = $outputs.resourceGroupName.value
 Write-Host "  Resource Group    : $rgName" -ForegroundColor White
 Write-Host "  Storage Account   : $stgName" -ForegroundColor White
 Write-Host "  File Share        : $shareName" -ForegroundColor White
+
+# =============================================================================
+# 7. AD DS Registration — Register storage account in on-premises Active Directory
+# =============================================================================
+if ($SkipADDS) {
+    Write-Header "AD DS Registration — SKIPPED (-SkipADDS)"
+} elseif ([string]::IsNullOrWhiteSpace($LabBaseName)) {
+    Write-Header "AD DS Registration — SKIPPED (no -LabBaseName)"
+    Write-Host "   AD DS registration requires -LabBaseName to locate the Domain Controller." -ForegroundColor Yellow
+    Write-Host "   Run again with -LabBaseName to enable AD DS Kerberos auth for SMB." -ForegroundColor Yellow
+} else {
+    Write-Header "AD DS Registration — Kerberos SMB Authentication"
+
+    # --- Derive domain name ---
+    if ([string]::IsNullOrWhiteSpace($DomainName)) {
+        # Lab convention: domain name matches lab base name + .local
+        # Query DC01 to get the actual domain name dynamically
+        $labRgIdentity = "$LabBaseName-rg-identity"
+        $dcVmName = "$LabBaseName-dc01"
+
+        Write-Step "Querying DC01 for domain information..."
+        $domainQuery = az vm run-command invoke `
+            --resource-group $labRgIdentity `
+            --name $dcVmName `
+            --command-id RunPowerShellScript `
+            --scripts '(Get-ADDomain).DNSRoot' `
+            --query "value[0].message" -o tsv 2>&1
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Could not query DC01 ($dcVmName) in $labRgIdentity."
+            Write-Host "   Ensure the lab is deployed and DC01 is running." -ForegroundColor Yellow
+            Write-Host "   You can skip this step with -SkipADDS and register manually later." -ForegroundColor Yellow
+            Write-Host "" ; exit 1
+        }
+
+        # Extract domain name from output (filter out [stdout] / [stderr] markers)
+        $DomainName = ($domainQuery -split "`n" | Where-Object { $_ -match '\.' -and $_ -notmatch '^\[' }).Trim()
+        if ([string]::IsNullOrWhiteSpace($DomainName)) {
+            Write-Fail "Could not determine domain name from DC01 output."
+            exit 1
+        }
+        Write-Ok "Domain: $DomainName"
+    } else {
+        Write-Ok "Domain (from parameter): $DomainName"
+    }
+
+    $labRgIdentity = "$LabBaseName-rg-identity"
+    $dcVmName = "$LabBaseName-dc01"
+
+    # --- Generate Kerberos key for the storage account ---
+    Write-Step "Generating Kerberos key for storage account..."
+
+    # Temporarily enable shared key access so we can generate and retrieve the kerb key.
+    # AD DS identity auth uses the kerb key to set the computer account password —
+    # this is separate from data-plane shared-key access which remains disabled.
+    az storage account update `
+        --name $stgName `
+        --resource-group $rgName `
+        --allow-shared-key-access true `
+        -o none 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Failed to temporarily enable shared key access."
+        exit 1
+    }
+
+    az storage account keys renew `
+        --account-name $stgName `
+        --resource-group $rgName `
+        --key-name kerb1 `
+        -o none 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Failed to generate Kerberos key."
+        exit 1
+    }
+
+    $kerbKey = az storage account keys list `
+        --account-name $stgName `
+        --resource-group $rgName `
+        --query "[?keyName=='kerb1'].value" -o tsv 2>&1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($kerbKey)) {
+        Write-Fail "Failed to retrieve Kerberos key."
+        exit 1
+    }
+    $kerbKey = $kerbKey.Trim()
+    Write-Ok "Kerberos key generated (kerb1)"
+
+    # --- Run AD registration script on DC01 ---
+    Write-Step "Registering storage account in Active Directory (running on DC01)..."
+
+    $adScript = Get-Content (Join-Path $ScriptRoot 'scripts' 'Register-StorageInAD.ps1') -Raw
+
+    $adResult = az vm run-command invoke `
+        --resource-group $labRgIdentity `
+        --name $dcVmName `
+        --command-id RunPowerShellScript `
+        --scripts $adScript `
+        --parameters "StorageAccountName=$stgName" "DomainName=$DomainName" `
+        --protected-parameters "StorageKerbKey=$kerbKey" `
+        --query "value[0].message" -o tsv 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "AD registration failed on DC01."
+        Write-Host $adResult -ForegroundColor Gray
+        exit 1
+    }
+
+    # Parse the JSON result from the script output
+    $jsonMatch = [regex]::Match($adResult, 'AD_REGISTRATION_RESULT=(.+)')
+    if (-not $jsonMatch.Success) {
+        Write-Fail "Could not parse AD registration output."
+        Write-Host $adResult -ForegroundColor Gray
+        exit 1
+    }
+
+    $adInfo = $jsonMatch.Groups[1].Value | ConvertFrom-Json
+    Write-Ok "Computer account: $($adInfo.computerName)"
+    Write-Ok "SPN: $($adInfo.spn)"
+    Write-Ok "Azure Storage SID: $($adInfo.azureStorageSid)"
+
+    # --- Update storage account with AD DS identity configuration ---
+    Write-Step "Configuring storage account for AD DS authentication..."
+
+    az storage account update `
+        --name $stgName `
+        --resource-group $rgName `
+        --enable-files-adds true `
+        --domain-name $DomainName `
+        --net-bios-domain-name $adInfo.netBiosDomainName `
+        --forest-name $adInfo.forestName `
+        --domain-guid $adInfo.domainGuid `
+        --domain-sid $adInfo.domainSid `
+        --azure-storage-sid $adInfo.azureStorageSid `
+        --default-share-permission StorageFileDataSmbShareContributor `
+        -o none 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Failed to configure AD DS authentication on storage account."
+        exit 1
+    }
+    Write-Ok "AD DS authentication enabled on storage account"
+
+    # --- Disable shared key access again ---
+    Write-Step "Re-disabling shared key data-plane access..."
+    az storage account update `
+        --name $stgName `
+        --resource-group $rgName `
+        --allow-shared-key-access false `
+        -o none 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Warning: failed to re-disable shared key access. Disable manually:"
+        Write-Host "   az storage account update --name $stgName -g $rgName --allow-shared-key-access false" -ForegroundColor Gray
+    } else {
+        Write-Ok "Shared key data-plane access re-disabled"
+    }
+}
+
+# =============================================================================
+# 8. Post-Deployment Summary
+# =============================================================================
+Write-Header "Deployment Complete!"
+Write-Host ""
+Write-Host "  Resource Group    : $rgName" -ForegroundColor White
+Write-Host "  Storage Account   : $stgName" -ForegroundColor White
+Write-Host "  File Share        : $shareName" -ForegroundColor White
 Write-Host ""
 Write-Host "  Access (requires VPN or VNet connectivity):" -ForegroundColor Cyan
 Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host "  Upload a file:" -ForegroundColor White
+Write-Host ""
+Write-Host "  From VPN workstation (az CLI + OAuth/MFA):" -ForegroundColor White
 Write-Host "    az storage file upload --account-name $stgName --share-name $shareName --source <local-file> --auth-mode login" -ForegroundColor Gray
-Write-Host ""
-Write-Host "  List files:" -ForegroundColor White
 Write-Host "    az storage file list --account-name $stgName --share-name $shareName --auth-mode login -o table" -ForegroundColor Gray
+Write-Host "    az storage file download --account-name $stgName --share-name $shareName --path <file> --dest <local-path> --auth-mode login" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  Download a file:" -ForegroundColor White
-Write-Host "    az storage file download --account-name $stgName --share-name $shareName --path <filename> --dest <local-path> --auth-mode login" -ForegroundColor Gray
-Write-Host ""
-Write-Host "  Mount via SMB (from domain-joined or Entra-joined VM on the VNet):" -ForegroundColor White
+Write-Host "  From domain-joined VM (Kerberos SMB — no credentials prompt):" -ForegroundColor White
 Write-Host "    net use Z: \\$stgName.file.core.windows.net\$shareName" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  NOTE: This storage account has NO public access." -ForegroundColor Yellow

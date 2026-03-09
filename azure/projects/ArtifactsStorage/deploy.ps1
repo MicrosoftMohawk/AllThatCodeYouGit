@@ -142,8 +142,13 @@ try {
 # --- Login session ------------------------------------------------------------
 Write-Step "Checking Azure login session..."
 try {
+    # Validate both ARM and Graph tokens — they use separate grants and one may
+    # be expired/broken while the other still works.  AADSTS135010 in particular
+    # means the refresh token is stale and requires an interactive login.
     $tokenJson = az account get-access-token 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Token expired" }
+    if ($LASTEXITCODE -ne 0) { throw "ARM token expired" }
+    $graphCheck = az account get-access-token --resource https://graph.microsoft.com 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Graph token expired" }
     $account = az account show 2>&1 | ConvertFrom-Json
     Write-Ok "Logged in as $($account.user.name) (tenant: $($account.tenantId))"
     Write-Host ""
@@ -157,7 +162,7 @@ try {
         Write-Ok "Now logged in as $($account.user.name)"
     }
 } catch {
-    Write-Host "   Not logged in. Opening browser..." -ForegroundColor Yellow
+    Write-Host "   Session expired or invalid. Opening browser login..." -ForegroundColor Yellow
     az login
     if ($LASTEXITCODE -ne 0) { Write-Fail "Login failed."; exit 1 }
     $account = az account show 2>&1 | ConvertFrom-Json
@@ -274,9 +279,13 @@ $rbacInput = Read-Host "   User UPN or Group name"
 if (-not [string]::IsNullOrWhiteSpace($rbacInput)) {
     $rbacInput = $rbacInput.Trim()
     if ($rbacInput -match '@') {
-        $userObj = az ad user show --id $rbacInput --query id -o tsv 2>&1
+        if ($account -and $account.user.name -eq $rbacInput) {
+            $userObj = az ad signed-in-user show --query id -o tsv 2>&1
+        } else {
+            $userObj = az ad user show --id $rbacInput --query id -o tsv 2>&1
+        }
         if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($userObj)) {
-            $DeployerObjectId = $userObj.Trim()
+            $DeployerObjectId = ("$userObj").Trim()
             $PrincipalType = 'User'
             Write-Ok "User found — Object ID: $DeployerObjectId"
         } else { Write-Fail "User '$rbacInput' not found. Skipping RBAC." }
@@ -336,12 +345,12 @@ Write-Step "Validating Azure CLI session..."
 $tokenCheck = az account get-access-token --query "expiresOn" -o tsv 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "   Session expired. Re-authenticating..." -ForegroundColor Yellow
-    az login | Out-Null
+    az login
     if ($LASTEXITCODE -ne 0) { Write-Fail "Login failed."; exit 1 }
     if ($SubscriptionId) { az account set --subscription $SubscriptionId 2>&1 | Out-Null }
-} else {
-    Write-Ok "Session valid (token expires: $tokenCheck)"
+    $tokenCheck = az account get-access-token --query "expiresOn" -o tsv 2>&1
 }
+Write-Ok "Session valid (token expires: $tokenCheck)"
 
 Write-Header "Starting Deployment"
 $deploymentName = "$NamePrefix-artifacts-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
@@ -395,11 +404,13 @@ if ($SkipADDS) {
         $dcVmName = "$LabBaseName-dc01"
 
         Write-Step "Querying DC01 for domain information..."
+        # Avoid parentheses in --scripts — az.cmd shells through cmd.exe
+        # which interprets () as grouping operators and breaks the command.
         $domainQuery = az vm run-command invoke `
             --resource-group $labRgIdentity `
             --name $dcVmName `
             --command-id RunPowerShellScript `
-            --scripts '(Get-ADDomain).DNSRoot' `
+            --scripts "Get-ADDomain | Select-Object -ExpandProperty DnsRoot" `
             --query "value[0].message" -o tsv 2>&1
 
         if ($LASTEXITCODE -ne 0) {
@@ -442,7 +453,8 @@ if ($SkipADDS) {
     az storage account keys renew `
         --account-name $stgName `
         --resource-group $rgName `
-        --key-name kerb1 `
+        --key key1 `
+        --key-type kerb `
         -o none 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "Failed to generate Kerberos key."
@@ -463,28 +475,70 @@ if ($SkipADDS) {
     # --- Run AD registration script on DC01 ---
     Write-Step "Registering storage account in Active Directory (running on DC01)..."
 
-    $adScript = Get-Content (Join-Path $ScriptRoot 'scripts' 'Register-StorageInAD.ps1') -Raw
+    # Read the script, strip the <# #> comment block (cmd.exe corrupts it),
+    # and strip the param() block.  az vm run-command invoke --parameters
+    # doesn't reliably bind to PowerShell param() blocks when using @file.
+    # Instead, we prepend variable assignments directly into the script.
+    $adScriptPath = Join-Path $ScriptRoot 'scripts' 'Register-StorageInAD.ps1'
+    $adScriptContent = Get-Content $adScriptPath -Raw
+    # Remove <# ... #> comment block
+    $adScriptContent = $adScriptContent -replace '(?s)<#.*?#>\s*', ''
+    # Remove param(...) block — use greedy match to get past nested parens
+    # like [Parameter(Mandatory = $true)], matching up to the final closing )
+    # that sits alone on its own line.
+    $adScriptContent = $adScriptContent -replace '(?sm)param\s*\(.*?^\)\s*', ''
 
-    $adResult = az vm run-command invoke `
+    # Prepend variable assignments with the actual values
+    $preamble = @"
+`$StorageAccountName = '$($stgName -replace "'","''")'
+`$StorageKerbKey = '$($kerbKey -replace "'","''")'
+`$DomainName = '$($DomainName -replace "'","''")'
+`$OUPath = ''
+
+"@
+    $adScriptContent = $preamble + $adScriptContent
+
+    # Write to temp file and invoke via @file
+    $tempScript = Join-Path ([System.IO.Path]::GetTempPath()) "Register-StorageInAD-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+    $adScriptContent | Set-Content -Path $tempScript -Encoding UTF8 -NoNewline
+
+    $adResultRaw = az vm run-command invoke `
         --resource-group $labRgIdentity `
         --name $dcVmName `
         --command-id RunPowerShellScript `
-        --scripts $adScript `
-        --parameters "StorageAccountName=$stgName" "DomainName=$DomainName" `
-        --protected-parameters "StorageKerbKey=$kerbKey" `
-        --query "value[0].message" -o tsv 2>&1
+        --scripts "@$tempScript" `
+        -o json 2>&1
+
+    Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
+
+    # Parse the full JSON response to get both stdout and stderr
+    $adResultText = ($adResultRaw | ForEach-Object { "$_" }) -join "`n"
+    try {
+        $adResultJson = $adResultText | ConvertFrom-Json
+        $stdout = $adResultJson.value | Where-Object { $_.code -match 'StdOut' } | Select-Object -ExpandProperty message
+        $stderr = $adResultJson.value | Where-Object { $_.code -match 'StdErr' } | Select-Object -ExpandProperty message
+    } catch {
+        $stdout = $adResultText
+        $stderr = ''
+    }
 
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "AD registration failed on DC01."
-        Write-Host $adResult -ForegroundColor Gray
+        if ($stderr) { Write-Host "   stderr: $stderr" -ForegroundColor Gray }
+        if ($stdout) { Write-Host "   stdout: $stdout" -ForegroundColor Gray }
         exit 1
     }
 
-    # Parse the JSON result from the script output
-    $jsonMatch = [regex]::Match($adResult, 'AD_REGISTRATION_RESULT=(.+)')
+    # Parse the JSON result from the script stdout
+    $combinedOutput = "$stdout`n$stderr"
+    $jsonMatch = [regex]::Match($combinedOutput, 'AD_REGISTRATION_RESULT=(.+)')
     if (-not $jsonMatch.Success) {
         Write-Fail "Could not parse AD registration output."
-        Write-Host $adResult -ForegroundColor Gray
+        Write-Host "   --- DC01 stdout ---" -ForegroundColor Gray
+        if ($stdout) { ($stdout -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray } }
+        Write-Host "   --- DC01 stderr ---" -ForegroundColor Gray
+        if ($stderr) { ($stderr -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Red } }
+        Write-Host "   --- end ---" -ForegroundColor Gray
         exit 1
     }
 

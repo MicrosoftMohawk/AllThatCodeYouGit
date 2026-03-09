@@ -97,5 +97,5 @@ resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2
 // Outputs
 // ---------------------------------------------------------------------------
 output privateEndpointId string = pe.id
-output privateEndpointIp string = dnsZoneGroup.properties.provisioningState == 'Succeeded' ? pe.properties.customDnsConfigs[0].ipAddresses[0] : 'pending'
+output privateEndpointIp string = length(pe.properties.customDnsConfigs) > 0 && length(pe.properties.customDnsConfigs[0].ipAddresses) > 0 ? pe.properties.customDnsConfigs[0].ipAddresses[0] : 'pending'
 output dnsZoneId string = dnsZone.id

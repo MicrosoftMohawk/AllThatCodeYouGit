@@ -310,16 +310,45 @@ if (-not $IsIncremental) {
 
     if (-not [string]::IsNullOrWhiteSpace($kvAdminInput)) {
         $kvAdminInput = $kvAdminInput.Trim()
+
+        # Ensure the Graph API token is valid — az ad commands use the Graph
+        # resource which has a separate token from ARM.  If the Graph token has
+        # expired the ad commands will fail with AADSTS135010.
+        az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   Graph API token expired — re-authenticating for Microsoft Graph..." -ForegroundColor Yellow
+            az login --scope https://graph.microsoft.com//.default | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "Graph re-authentication failed. Skipping KV RBAC."
+                Write-Host "   Run 'az login --scope https://graph.microsoft.com//.default' manually, then retry." -ForegroundColor Gray
+            }
+        }
+
         # Try as user first (contains @), then as group
         if ($kvAdminInput -match '@') {
             Write-Host "   Looking up user: $kvAdminInput" -ForegroundColor Gray
-            $userObj = az ad user show --id $kvAdminInput --query id -o tsv 2>&1
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($userObj)) {
-                $DeployerObjectId = $userObj.Trim()
-                $KvPrincipalType = 'User'
-                Write-Ok "User found — Object ID: $DeployerObjectId"
+
+            # If the entered UPN matches the currently signed-in user, use
+            # az ad signed-in-user (avoids Graph lookup issues with MSA /
+            # B2B guest accounts that can't resolve their own UPN).
+            if ($account -and $account.user.name -eq $kvAdminInput) {
+                $userObjId = az ad signed-in-user show --query id -o tsv 2>&1
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($userObjId)) {
+                    $DeployerObjectId = ("$userObjId").Trim()
+                    $KvPrincipalType = 'User'
+                    Write-Ok "Signed-in user matched — Object ID: $DeployerObjectId"
+                } else {
+                    Write-Fail "Could not resolve signed-in user object ID. Skipping KV RBAC."
+                }
             } else {
-                Write-Fail "User '$kvAdminInput' not found in Entra ID. Skipping KV RBAC."
+                $userObj = az ad user show --id $kvAdminInput --query id -o tsv 2>&1
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($userObj)) {
+                    $DeployerObjectId = ("$userObj").Trim()
+                    $KvPrincipalType = 'User'
+                    Write-Ok "User found — Object ID: $DeployerObjectId"
+                } else {
+                    Write-Fail "User '$kvAdminInput' not found in Entra ID. Skipping KV RBAC."
+                }
             }
         } else {
             Write-Host "   Looking up group: $kvAdminInput" -ForegroundColor Gray
@@ -485,9 +514,9 @@ if ($Destroy) {
         }
     }
 
-    # Delete non-network RGs first (async), then network RG last (sync)
+    # Delete non-network RGs first (async), then network RG last (synchronous)
     # so VNet/subnet deletion waits for dependent NIC cleanups to complete.
-    $nonNetworkRgs = $existingRgs | Where-Object { $_ -ne $networkRg }
+    $nonNetworkRgs = @($existingRgs | Where-Object { $_ -ne $networkRg })
     $hasNetworkRg = $existingRgs -contains $networkRg
 
     foreach ($rg in $nonNetworkRgs) {
@@ -503,24 +532,74 @@ if ($Destroy) {
     if ($hasNetworkRg) {
         if ($nonNetworkRgs.Count -gt 0) {
             Write-Step "Waiting for non-network resource groups to finish deleting..."
+            $waitFailed = $false
             foreach ($rg in $nonNetworkRgs) {
-                az group wait --name $rg --deleted --timeout 600 2>&1 | Out-Null
+                Write-Host "   Waiting on $rg..." -ForegroundColor Gray
+                az group wait --name $rg --deleted --timeout 600 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    # az group wait exits non-zero if the RG still exists (timeout) OR
+                    # exits 0 / 3 (not found) if it was already deleted.  Verify explicitly.
+                    $stillExists = az group exists --name $rg 2>&1
+                    if ($stillExists -eq 'true') {
+                        Write-Fail "Timed out waiting for $rg to delete — it still exists"
+                        $waitFailed = $true
+                    } else {
+                        Write-Ok "$rg confirmed deleted"
+                    }
+                } else {
+                    Write-Ok "$rg deleted"
+                }
             }
-            Write-Ok "Non-network resource groups deleted"
+
+            if ($waitFailed) {
+                Write-Fail "One or more non-network RGs are still being deleted."
+                Write-Host "   Cannot safely delete $networkRg while dependents remain." -ForegroundColor Yellow
+                Write-Host "   Re-run this script with -Destroy once the pending deletions complete." -ForegroundColor Yellow
+                Write-Host "   Monitor: az group list --query `"[?starts_with(name,'$BaseName')]`" -o table" -ForegroundColor Gray
+                exit 1
+            }
+
+            # Brief buffer for ARM to fully deregister NICs from subnets (eventual consistency)
+            Write-Host "   Allowing time for ARM to deregister subnet references..." -ForegroundColor Gray
+            Start-Sleep -Seconds 30
         }
-        Write-Step "Deleting network resource group: $networkRg"
-        az group delete --name $networkRg --yes --no-wait
+
+        Write-Step "Deleting network resource group: $networkRg (synchronous — this may take a few minutes)"
+        az group delete --name $networkRg --yes
         if ($LASTEXITCODE -ne 0) {
-            Write-Fail "Failed to initiate deletion for $networkRg"
-        } else {
-            Write-Ok "Deletion initiated for $networkRg (running in background)"
+            Write-Fail "Failed to delete $networkRg"
+            Write-Host "   This usually means a dependent resource still references the VNet." -ForegroundColor Yellow
+            Write-Host "   Check for leftover Private Endpoints or DNS links, then retry." -ForegroundColor Yellow
+            exit 1
+        }
+        Write-Ok "$networkRg deleted"
+    }
+
+    # ── Post-destroy verification ────────────────────────────────────────────
+    Write-Step "Verifying all resource groups are removed..."
+    $remaining = @()
+    foreach ($rg in $existingRgs) {
+        $stillExists = az group exists --name $rg 2>&1
+        if ($stillExists -eq 'true') {
+            $remaining += $rg
         }
     }
 
+    if ($remaining.Count -gt 0) {
+        Write-Header "Destroy Incomplete"
+        Write-Host "   The following resource groups still exist:" -ForegroundColor Yellow
+        foreach ($rg in $remaining) {
+            Write-Host "     - $rg" -ForegroundColor Yellow
+        }
+        Write-Host ""
+        Write-Host "   Re-run with -Destroy once these finish deleting, or remove manually:" -ForegroundColor Gray
+        Write-Host "   az group delete --name <rg-name> --yes" -ForegroundColor Gray
+        exit 1
+    }
+
     Write-Header "Destroy Complete"
-    Write-Host "   All resource group deletions have been initiated (--no-wait)." -ForegroundColor White
-    Write-Host "   Deletions run asynchronously and may take several minutes to complete." -ForegroundColor Gray
-    Write-Host "   Monitor progress: az group list --query `"[?starts_with(name,'$BaseName')]`" -o table" -ForegroundColor Gray
+    Write-Host "   All resource groups for '$BaseName' have been deleted." -ForegroundColor Green
+    Write-Host ""
     exit 0
 }
 

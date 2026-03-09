@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.41.2.15936",
-      "templateHash": "12449361096841967191"
+      "version": "0.40.2.10011",
+      "templateHash": "7829855973342913180"
     }
   },
   "parameters": {
@@ -387,8 +387,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "1209376897630896095"
+              "version": "0.40.2.10011",
+              "templateHash": "9985829790034559379"
             }
           },
           "parameters": {
@@ -530,8 +530,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "9733339086765552914"
+              "version": "0.40.2.10011",
+              "templateHash": "5202352379583504082"
             }
           },
           "parameters": {
@@ -1020,8 +1020,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "1251834858996191700"
+              "version": "0.40.2.10011",
+              "templateHash": "17096646037920580551"
             }
           },
           "parameters": {
@@ -1152,8 +1152,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "6995448948767322530"
+              "version": "0.40.2.10011",
+              "templateHash": "6456828884929206388"
             }
           },
           "parameters": {
@@ -1344,8 +1344,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "9618168942547393665"
+              "version": "0.40.2.10011",
+              "templateHash": "898749787315272574"
             }
           },
           "parameters": {
@@ -1525,8 +1525,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "7766326754190704509"
+              "version": "0.40.2.10011",
+              "templateHash": "7860481273955503397"
             }
           },
           "parameters": {
@@ -1690,8 +1690,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "16792504878712237357"
+              "version": "0.40.2.10011",
+              "templateHash": "16592675981682427211"
             }
           },
           "parameters": {
@@ -1817,8 +1817,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -2120,8 +2120,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -2408,8 +2408,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "15547947885724066162"
+              "version": "0.40.2.10011",
+              "templateHash": "16345238792777154824"
             }
           },
           "parameters": {
@@ -2518,8 +2518,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "6950111594647768832"
+              "version": "0.40.2.10011",
+              "templateHash": "5754894271378730022"
             }
           },
           "parameters": {
@@ -2641,8 +2641,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "15706415509465765135"
+              "version": "0.40.2.10011",
+              "templateHash": "14978676730037363441"
             }
           },
           "parameters": {
@@ -2766,8 +2766,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "10520452331920987438"
+              "version": "0.40.2.10011",
+              "templateHash": "12357900753089267207"
             }
           },
           "parameters": {
@@ -2875,8 +2875,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "6273128364922630325"
+              "version": "0.40.2.10011",
+              "templateHash": "1945967071267949883"
             }
           },
           "parameters": {
@@ -3093,8 +3093,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -3403,8 +3403,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -3713,8 +3713,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -4029,8 +4029,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -4347,8 +4347,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -4641,8 +4641,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -4696,6 +4696,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4716,7 +4736,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4774,8 +4797,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -4829,6 +4852,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4849,7 +4892,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4907,8 +4953,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -4962,6 +5008,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4982,7 +5048,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -5040,8 +5109,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -5095,6 +5164,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -5115,7 +5204,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -5173,8 +5265,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -5228,6 +5320,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -5248,7 +5360,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -5318,8 +5433,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -5622,8 +5737,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -5926,8 +6041,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -6227,8 +6342,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18432750913663090032"
+              "version": "0.40.2.10011",
+              "templateHash": "8923749400445405374"
             }
           },
           "parameters": {
@@ -6519,8 +6634,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -6574,6 +6689,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6594,7 +6729,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -6652,8 +6790,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -6707,6 +6845,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6727,7 +6885,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -6785,8 +6946,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -6840,6 +7001,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6860,7 +7041,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -6918,8 +7102,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18314310179791224337"
+              "version": "0.40.2.10011",
+              "templateHash": "4096563170028146372"
             }
           },
           "parameters": {
@@ -6973,6 +7157,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i — found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6993,7 +7197,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "11874483486702315788"
+      "templateHash": "4432551566903296884"
     }
   },
   "parameters": {
@@ -384,7 +384,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "7508236405092829269"
+              "templateHash": "4476408876748287294"
             }
           },
           "parameters": {
@@ -509,7 +509,7 @@
             },
             "privateEndpointIp": {
               "type": "string",
-              "value": "[if(equals(reference(resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('{0}-pe-file', parameters('storageAccountName')), 'default'), '2023-11-01').provisioningState, 'Succeeded'), reference(resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs[0].ipAddresses[0], 'pending')]"
+              "value": "[if(and(greater(length(reference(resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs), 0), greater(length(reference(resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs[0].ipAddresses), 0)), reference(resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs[0].ipAddresses[0], 'pending')]"
             },
             "dnsZoneId": {
               "type": "string",

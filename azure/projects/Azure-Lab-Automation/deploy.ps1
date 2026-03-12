@@ -113,6 +113,9 @@ param(
 
     [string]$TimeZone,
 
+    [ValidateSet('Premium_LRS', 'StandardSSD_LRS', 'Standard_LRS')]
+    [string]$OsDiskSku = 'Premium_LRS',
+
     [switch]$WhatIf,
 
     [switch]$Destroy
@@ -1076,6 +1079,7 @@ $deployParams = @(
     "entraIdDomain=$EntraIdDomain"
     "domainStrategy=$DomainStrategy"
     "entraConnectPlacement=$EntraConnectPlacement"
+    "osDiskSku=$OsDiskSku"
     $colocateParam
     $joinDomainParam
 ) + $vmNameParams

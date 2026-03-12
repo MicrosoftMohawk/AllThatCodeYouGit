@@ -55,6 +55,14 @@ param dataDiskSizeGb int = 128
 ])
 param dataDiskSku string = 'Premium_LRS'
 
+@description('Storage type for the OS disk')
+@allowed([
+  'Premium_LRS'
+  'StandardSSD_LRS'
+  'Standard_LRS'
+])
+param osDiskSku string = 'Premium_LRS'
+
 @description('Optional: Availability Set resource ID')
 param availabilitySetId string = ''
 
@@ -144,7 +152,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
         name: '${vmName}-osdisk'
         createOption: 'FromImage'
         managedDisk: {
-          storageAccountType: 'Premium_LRS'
+          storageAccountType: osDiskSku
         }
         caching: 'ReadWrite'
         diskSizeGB: 128

@@ -88,6 +88,12 @@ param sizeSQL string = 'Standard_D4s_v5'
 @description('VM size for AOAG SQL VMs (Site 2 — PrimC)')
 param sizeSQLAoag string = 'Standard_D8s_v5'
 
+// --- Disk SKUs ---------------------------------------------------------------
+
+@description('OS disk storage type for all VMs')
+@allowed(['Premium_LRS', 'StandardSSD_LRS', 'Standard_LRS'])
+param osDiskSku string = 'Premium_LRS'
+
 // --- Network CIDRs -----------------------------------------------------------
 
 @description('VNet address space')
@@ -396,6 +402,7 @@ module dc01 'modules/compute/vm.bicep' = {
     imageOffer: imageOffer
     imageSku: imageSku
     privateIpAddress: dc01Ip
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -414,6 +421,7 @@ module dc02 'modules/compute/vm.bicep' = {
     imageOffer: imageOffer
     imageSku: imageSku
     privateIpAddress: dc02Ip
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -467,6 +475,7 @@ module entraConnectVm 'modules/compute/vm.bicep' = if (deployEntraConnectVm) {
     imageOffer: imageOffer
     imageSku: imageSku
     privateIpAddress: entraConnectIp
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'entra-connect' })
   }
 }
@@ -571,6 +580,7 @@ module sqlCas 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateS
     dataDiskCount: 2
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -593,6 +603,7 @@ module sqlPrima 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskCount: 2
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -615,6 +626,7 @@ module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskCount: 2
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server', site: 'site1' })
   }
 }
@@ -639,6 +651,7 @@ module sqlPrimc01 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
     dataDiskSku: 'Premium_LRS'
     availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
     loadBalancerBackendPoolId: ilb.outputs.backendPoolId
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '1' })
   }
 }
@@ -663,6 +676,7 @@ module sqlPrimc02 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
     dataDiskSku: 'Premium_LRS'
     availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
     loadBalancerBackendPoolId: ilb.outputs.backendPoolId
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '2' })
   }
 }
@@ -767,6 +781,7 @@ module casVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskCount: colocateSql ? 2 : 0
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: colocateSql ? 'cas-sql' : 'cas', site: 'main' })
   }
 }
@@ -789,6 +804,7 @@ module primaVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskCount: colocateSql ? 2 : 0
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'main' })
   }
 }
@@ -811,6 +827,7 @@ module primbVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskCount: colocateSql ? 2 : 0
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'site1' })
   }
 }
@@ -830,6 +847,7 @@ module primcVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     imagePublisher: imagePublisher
     imageOffer: imageOffer
     imageSku: imageSku
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'child-primary', site: 'site2' })
   }
 }

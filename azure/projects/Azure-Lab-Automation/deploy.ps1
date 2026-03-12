@@ -29,6 +29,24 @@
     When specified, SQL and MCM VMs will NOT be domain-joined during deployment.
     By default, all SQL and MCM VMs are automatically joined to the AD domain.
 
+.PARAMETER EnableEntraIntegration
+    Enable Entra ID hybrid identity integration. Deploys Entra Connect Sync
+    server and a management VM with Entra ID login capability.
+
+.PARAMETER EntraIdDomain
+    Entra ID tenant domain (e.g., usaavd.com). Required when -EnableEntraIntegration
+    is specified.
+
+.PARAMETER DomainStrategy
+    AD domain naming strategy:
+      subdomain   = AD domain is ad.{EntraIdDomain} (default, cleanest UPN routing)
+      independent = AD domain is separate, EntraIdDomain added as UPN suffix
+
+.PARAMETER EntraConnectPlacement
+    Where to install Entra Connect:
+      dedicated = New VM (default)
+      dc02      = Install on DC02 (saves cost)
+
 .PARAMETER WhatIf
     Preview changes without deploying (Azure What-If).
 
@@ -82,6 +100,16 @@ param(
     [switch]$ColocateSql,
 
     [switch]$SkipDomainJoin,
+
+    [switch]$EnableEntraIntegration,
+
+    [string]$EntraIdDomain,
+
+    [ValidateSet('subdomain', 'independent')]
+    [string]$DomainStrategy = 'subdomain',
+
+    [ValidateSet('dedicated', 'dc02')]
+    [string]$EntraConnectPlacement = 'dedicated',
 
     [string]$TimeZone,
 
@@ -663,6 +691,84 @@ if ([string]::IsNullOrWhiteSpace($DomainName) -or $DomainName -notmatch '^[a-zA-
 Write-Ok "Domain: $DomainName (NetBIOS: $($DomainName.Split('.')[0].ToUpper()))"
 
 # =============================================================================
+# 3aa0. Entra ID Integration Configuration
+# =============================================================================
+$EnableEntraBool = [bool]$EnableEntraIntegration
+
+if (-not $EnableEntraBool) {
+    Write-Step "Entra ID hybrid identity integration..."
+    Write-Host ""
+    Write-Host "   Enable Entra ID integration to deploy:" -ForegroundColor White
+    Write-Host "     - Entra Connect Sync (syncs on-prem AD identities to Entra ID)" -ForegroundColor Gray
+    Write-Host "     - UPN suffix configuration in AD for Entra ID domain" -ForegroundColor Gray
+    Write-Host "     - Enables Entra ID Kerberos for Azure Files" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "   NOTE: The management VM (Entra ID joined) is deployed separately" -ForegroundColor Yellow
+    Write-Host "   after the lab is running via: .\deploy-mgmt.ps1" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   Prerequisites: Entra ID tenant, Azure AD P2 license" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   [1] Skip (AD-only deployment)" -ForegroundColor White
+    Write-Host "   [2] Enable Entra ID integration" -ForegroundColor White
+    $entraChoice = Read-Host "   Select (default: 1)"
+    if ($entraChoice -eq '2') {
+        $EnableEntraBool = $true
+    }
+}
+
+if ($EnableEntraBool) {
+    # --- Entra ID Domain ---
+    if ([string]::IsNullOrWhiteSpace($EntraIdDomain)) {
+        $EntraIdDomain = Read-Host "   Enter your Entra ID tenant domain (e.g., usaavd.com)"
+    }
+    if ([string]::IsNullOrWhiteSpace($EntraIdDomain) -or $EntraIdDomain -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$') {
+        Write-Fail "Invalid Entra ID domain. Must be a valid FQDN (e.g., usaavd.com)"
+        exit 1
+    }
+    $EntraIdDomain = $EntraIdDomain.Trim()
+    Write-Ok "Entra ID domain: $EntraIdDomain"
+
+    # --- Domain Strategy ---
+    if (-not $PSBoundParameters.ContainsKey('DomainStrategy')) {
+        Write-Host ""
+        Write-Host "   AD domain naming strategy:" -ForegroundColor White
+        Write-Host "   [1] Subdomain: AD domain = ad.$EntraIdDomain (recommended, UPNs match)" -ForegroundColor White
+        Write-Host "   [2] Independent: AD domain = $DomainName (UPN suffix $EntraIdDomain added to AD)" -ForegroundColor White
+        $dsChoice = Read-Host "   Select (default: 1)"
+        if ($dsChoice -eq '2') {
+            $DomainStrategy = 'independent'
+        } else {
+            $DomainStrategy = 'subdomain'
+        }
+    }
+    Write-Ok "Domain strategy: $DomainStrategy"
+
+    # Auto-derive domain name in subdomain mode
+    if ($DomainStrategy -eq 'subdomain') {
+        $DomainName = "ad.$EntraIdDomain"
+        Write-Ok "AD domain auto-set to: $DomainName (subdomain of $EntraIdDomain)"
+    }
+
+    # --- Entra Connect Placement ---
+    if (-not $PSBoundParameters.ContainsKey('EntraConnectPlacement')) {
+        Write-Host ""
+        Write-Host "   Entra Connect Sync placement:" -ForegroundColor White
+        Write-Host "   [1] Dedicated VM (recommended for production parity)" -ForegroundColor White
+        Write-Host "   [2] Install on DC02 (saves cost)" -ForegroundColor White
+        $ecpChoice = Read-Host "   Select (default: 1)"
+        if ($ecpChoice -eq '2') {
+            $EntraConnectPlacement = 'dc02'
+        } else {
+            $EntraConnectPlacement = 'dedicated'
+        }
+    }
+    Write-Ok "Entra Connect placement: $EntraConnectPlacement"
+} else {
+    $EntraIdDomain = ''
+    Write-Step "Entra ID integration: DISABLED (AD-only deployment)"
+}
+
+# =============================================================================
 # 3aa. VM Timezone Selection
 # =============================================================================
 $timezoneOptions = [ordered]@{
@@ -812,10 +918,11 @@ $JoinDomainBool = -not [bool]$SkipDomainJoin   # default = join domain
 if (-not $SkipDomainJoin) {
     Write-Step "Domain join configuration..."
     Write-Host ""
-    Write-Host "   SQL and MCM VMs can be automatically domain-joined during deployment" -ForegroundColor White
-    Write-Host "   using the svc-domjoin service account (created by AD automation)." -ForegroundColor Gray
-    Write-Host "   SQL VMs → OU=SQL Servers,OU=Lab Servers" -ForegroundColor Gray
-    Write-Host "   MCM VMs → OU=App Servers,OU=Lab Servers" -ForegroundColor Gray
+    Write-Host "   SQL, MCM, and Entra Connect VMs can be automatically domain-joined" -ForegroundColor White
+    Write-Host "   during deployment using the svc-domjoin service account." -ForegroundColor Gray
+    Write-Host "   (The management VM is always Entra ID joined, not AD domain-joined.)" -ForegroundColor Gray
+    Write-Host "   SQL VMs -> OU=SQL Servers,OU=Lab Servers" -ForegroundColor Gray
+    Write-Host "   MCM/Entra Connect VMs -> OU=App Servers,OU=Lab Servers" -ForegroundColor Gray
     Write-Host ""
     Write-Host "   [1] Domain-join all SQL and MCM VMs (recommended)" -ForegroundColor White
     Write-Host "   [2] Skip domain join — deploy as workgroup servers" -ForegroundColor White
@@ -965,6 +1072,10 @@ $deployParams = @(
     "deployerObjectId=$DeployerObjectId"
     "kvPrincipalType=$KvPrincipalType"
     "vpnRootCertData=$VpnRootCertData"
+    "enableEntraIntegration=$($EnableEntraBool.ToString().ToLower())"
+    "entraIdDomain=$EntraIdDomain"
+    "domainStrategy=$DomainStrategy"
+    "entraConnectPlacement=$EntraConnectPlacement"
     $colocateParam
     $joinDomainParam
 ) + $vmNameParams
@@ -977,6 +1088,10 @@ Write-Host "  Incremental     : $IsIncremental" -ForegroundColor White
 Write-Host "  SQL Colocated   : $ColocateSqlBool" -ForegroundColor White
 Write-Host "  Domain Join     : $JoinDomainBool" -ForegroundColor White
 Write-Host "  Domain Name     : $DomainName" -ForegroundColor White
+Write-Host "  Entra ID        : $(if ($EnableEntraBool) {"ENABLED (domain: $EntraIdDomain, strategy: $DomainStrategy)"} else {'Disabled'})" -ForegroundColor White
+if ($EnableEntraBool) {
+    Write-Host "  Entra Connect   : $EntraConnectPlacement" -ForegroundColor White
+}
 Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White
 Write-Host "  Admin Password  : $(if ($IsIncremental) {'(reused from Key Vault)'} else {'(auto-generated, stored in Key Vault)'})" -ForegroundColor White
@@ -1048,6 +1163,9 @@ if ($VmTimeZone -ne 'UTC') {
         @{ Name = "$BaseName-dc01"; RG = "$BaseName-rg-identity" }
         @{ Name = "$BaseName-dc02"; RG = "$BaseName-rg-identity" }
     )
+    if ($EnableEntraBool -and $EntraConnectPlacement -eq 'dedicated') {
+        $vmTargets += @{ Name = "$BaseName-aadcs"; RG = "$BaseName-rg-identity" }
+    }
     if ($DeploymentTier -ge 2) {
         if (-not $ColocateSqlBool) {
             $vmTargets += @{ Name = $VmNames.SqlCas;  RG = "$BaseName-rg-main" }
@@ -1156,6 +1274,14 @@ if ($DeploymentTier -ge 2) {
 Write-Host ""
 Write-Host "  Deployed VMs:" -ForegroundColor Cyan
 Write-Host "    Identity : $BaseName-dc01, $BaseName-dc02" -ForegroundColor Gray
+if ($EnableEntraBool) {
+    if ($EntraConnectPlacement -eq 'dedicated') {
+        Write-Host "    EntraSync: $BaseName-aadcs (Entra Connect Sync)" -ForegroundColor Gray
+    } else {
+        Write-Host "    EntraSync: Installed on $BaseName-dc02" -ForegroundColor Gray
+    }
+    Write-Host "    Mgmt     : Deploy separately -> .\deploy-mgmt.ps1 -BaseName $BaseName" -ForegroundColor Yellow
+}
 if ($DeploymentTier -ge 2) {
     if (-not $ColocateSqlBool) {
         Write-Host "    SQL      : $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB)" -ForegroundColor Gray
@@ -1184,7 +1310,7 @@ Write-Host "  4) AD Domain Services (automated):" -ForegroundColor White
 Write-Host "     - DC01 promoted as first DC in $DomainName" -ForegroundColor Gray
 Write-Host "     - DC02 promoted as replica DC" -ForegroundColor Gray
 Write-Host "     - OUs, security groups, service accounts, and gMSA created" -ForegroundColor Gray
-Write-Host "     - Admin accounts: mcm-admin (GRP-MCMAdmins), sql-admin (GRP-SQLAdmins)" -ForegroundColor Gray
+Write-Host "     - Admin accounts: lab-admin (delegated OU admin), mcm-admin, sql-admin" -ForegroundColor Gray
 Write-Host "     - GRP-DomainAdmins-Lab created empty (populate manually)" -ForegroundColor Gray
 Write-Host "     - VNet DNS set to DC IPs (10.0.1.4, 10.0.1.5)" -ForegroundColor Gray
 if ($JoinDomainBool) {
@@ -1195,6 +1321,52 @@ if ($JoinDomainBool) {
     Write-Host "     - GRP-MCMAdmins added to Local Administrators on MCM VMs" -ForegroundColor Gray
 } else {
     Write-Host "  5) Domain-join remaining servers (SQL, MCM) — MANUAL (skipped during deployment)" -ForegroundColor Yellow
+}
+if ($EnableEntraBool) {
+    Write-Host ""
+    Write-Host "  ** ENTRA ID INTEGRATION (manual post-deployment steps) **" -ForegroundColor Cyan
+    $entraConnectVm = if ($EntraConnectPlacement -eq 'dedicated') { "$BaseName-aadcs" } else { "$BaseName-dc02" }
+    Write-Host "  A) Complete Entra Connect wizard on $entraConnectVm :" -ForegroundColor White
+    Write-Host "     1. RDP/Bastion into $entraConnectVm" -ForegroundColor Gray
+    Write-Host "     2. Launch 'Azure AD Connect' from desktop" -ForegroundColor Gray
+    Write-Host "     3. Accept license terms, click Continue" -ForegroundColor Gray
+    Write-Host "     4. Click 'Customize' (not Express Settings) for OU filtering" -ForegroundColor Gray
+    Write-Host "     5. Click 'Install' (no optional prereqs needed for lab)" -ForegroundColor Gray
+    Write-Host "     6. User Sign-in: select 'Password Hash Synchronization', click Next" -ForegroundColor Gray
+    Write-Host "     7. Connect to Entra ID: sign in with Global Administrator credentials" -ForegroundColor Gray
+    Write-Host "     8. Connect Directories: Forest = $DomainName, click 'Add Directory'" -ForegroundColor Gray
+    Write-Host "        -> Select 'Create new AD account', enter Enterprise Admin creds:" -ForegroundColor Gray
+    Write-Host "           Username: $DomainName\labadmin  |  Password: (from Key Vault)" -ForegroundColor Gray
+    Write-Host "     9. Azure AD sign-in: verify UPN suffix is configured, click Next" -ForegroundColor Gray
+    Write-Host "    10. Domain/OU filtering: select 'Sync selected domains and OUs'" -ForegroundColor Gray
+    Write-Host "        -> Uncheck all, then check ONLY:" -ForegroundColor Gray
+    Write-Host "           [x] Lab Accounts  [x] Lab Groups  [x] Lab Servers" -ForegroundColor Gray
+    Write-Host "    11. Uniquely identifying users: keep defaults, click Next" -ForegroundColor Gray
+    Write-Host "    12. Filter users/devices: keep 'Synchronize all', click Next" -ForegroundColor Gray
+    Write-Host "    13. Optional features: 'Password hash synchronization' is pre-checked" -ForegroundColor Gray
+    Write-Host "        -> No additional features needed for the lab" -ForegroundColor Gray
+    Write-Host "    14. Click 'Install' to start configuration and initial sync" -ForegroundColor Gray
+    Write-Host "    15. Wait for sync to complete (2-5 min), then verify in Entra ID > Users" -ForegroundColor Gray
+    Write-Host "" -ForegroundColor Gray
+    Write-Host "     OPTIONAL: Hybrid Entra ID Join (after initial sync):" -ForegroundColor Yellow
+    Write-Host "     -> Re-open Entra Connect > Configure > Device options" -ForegroundColor Gray
+    Write-Host "     -> Select 'Configure Hybrid Microsoft Entra ID join'" -ForegroundColor Gray
+    Write-Host "     -> Check 'Windows 10 or later domain-joined devices'" -ForegroundColor Gray
+    Write-Host "     -> Select your forest, configure SCP (Service Connection Point)" -ForegroundColor Gray
+    Write-Host "     -> This allows domain-joined VMs to also register in Entra ID" -ForegroundColor Gray
+    Write-Host "  B) Deploy Management VM (pure Entra ID joined):" -ForegroundColor White
+    Write-Host "     Run AFTER the lab deployment completes successfully:" -ForegroundColor Yellow
+    Write-Host "       .\deploy-mgmt.ps1 -BaseName $BaseName -Location $Location" -ForegroundColor Cyan
+    Write-Host "     This deploys $BaseName-mgmt with Entra ID login, RSAT, Az CLI" -ForegroundColor Gray
+    Write-Host "     lab-admin has delegated control over Lab OUs (not Domain Admin)" -ForegroundColor Gray
+    Write-Host "     To manage AD: runas /netonly /user:$DomainName\lab-admin mmc.exe" -ForegroundColor Gray
+    Write-Host "  C) Artifacts Storage (Azure Files share):" -ForegroundColor White
+    Write-Host "     Deploy from: .\..\ArtifactsStorage\deploy.ps1" -ForegroundColor Gray
+    Write-Host "     Option 1 - AD DS (recommended): all domain-joined VMs can net use" -ForegroundColor Gray
+    Write-Host "       .\deploy.ps1 -NamePrefix artifacts -Location $Location -LabBaseName $BaseName" -ForegroundColor Cyan
+    Write-Host "     Option 2 - Entra Kerberos: requires Hybrid Entra Join + synced user" -ForegroundColor Gray
+    Write-Host "       .\deploy.ps1 -NamePrefix artifacts -Location $Location -LabBaseName $BaseName -EnableEntraKerberos" -ForegroundColor Cyan
+    Write-Host "     Mgmt VM + VPN: use az storage file --auth-mode login (either mode)" -ForegroundColor Gray
 }
 if ($DeploymentTier -ge 2) {
     if ($ColocateSqlBool) {

@@ -3,6 +3,7 @@
 //
 // Deploys a modular Azure lab environment across 3 tiers:
 //   Tier 1: Core networking, AD Domain Controllers, Azure Bastion, Cloud Witness
+//          Optional: Entra Connect Sync + Management VM (hybrid identity)
 //   Tier 2: SQL Server VMs (5 total) including AOAG pair at Site 2 with ILB
 //   Tier 3: Application VMs (CAS + 3 child primaries)
 //
@@ -47,10 +48,33 @@ param deployerObjectId string = ''
 @allowed(['User', 'Group'])
 param kvPrincipalType string = 'User'
 
+// --- Entra ID Integration (Hybrid Identity) ---------------------------------
+
+@description('Enable Entra ID hybrid identity integration (Entra Connect Sync, Management VM with Entra ID login)')
+param enableEntraIntegration bool = false
+
+@description('Entra ID tenant domain (e.g., usaavd.com). Required when enableEntraIntegration is true.')
+param entraIdDomain string = ''
+
+@description('AD domain naming strategy: subdomain = AD domain is ad.{entraIdDomain}, independent = AD domain is separate with UPN suffix added')
+@allowed(['subdomain', 'independent'])
+param domainStrategy string = 'subdomain'
+
+@description('Where to install Entra Connect: dedicated = new VM, dc02 = install on DC02')
+@allowed(['dedicated', 'dc02'])
+param entraConnectPlacement string = 'dedicated'
+
+@description('VM name: Entra Connect Sync Server')
+@maxLength(15)
+param vmNameEntraConnect string = '${baseName}-entr'
+
 // --- VM Sizes ----------------------------------------------------------------
 
 @description('VM size for Domain Controllers')
 param sizeDC string = 'Standard_D2s_v5'
+
+@description('VM size for Management and Entra Connect VMs')
+param sizeManagement string = 'Standard_D2s_v5'
 
 @description('VM size for MCM site servers (when SQL is separate)')
 param sizeApp string = 'Standard_D4s_v5'
@@ -102,6 +126,9 @@ param dc01Ip string = '10.0.1.4'
 
 @description('Static IP for DC02')
 param dc02Ip string = '10.0.1.5'
+
+@description('Static IP for Entra Connect server')
+param entraConnectIp string = '10.0.1.6'
 
 @description('AOAG Listener IP (ILB frontend) in Site 2 subnet')
 param aoagListenerIp string = '10.0.40.10'
@@ -206,6 +233,11 @@ var effectiveAppSize = colocateSql ? sizeAppColocated : sizeApp
 
 // Domain join credential — uses svc-domjoin created by configureAD.bicep
 var domainJoinUser = 'svc-domjoin@${domainName}'
+
+// Entra integration — deploy Entra Connect VM only in dedicated placement mode
+var deployEntraConnectVm = enableEntraIntegration && entraConnectPlacement == 'dedicated'
+// Entra Connect target VM name (dedicated VM or DC02)
+var entraConnectTargetVm = entraConnectPlacement == 'dedicated' ? vmNameEntraConnect : dc02Name
 
 // =============================================================================
 // Resource Groups (all tiers — created upfront for idempotency)
@@ -407,13 +439,35 @@ module promoteDc01 'modules/identity/promoteDC.bicep' = {
 module configureAd 'modules/identity/configureAD.bicep' = {
   name: 'deploy-configure-ad'
   scope: rgId
-  dependsOn: [promoteDc01]
+  dependsOn: [promoteDc01, promoteDc02]
   params: {
     vmName: dc01Name
     location: location
     domainName: domainName
     svcAccountPassword: adminPassword
+    entraIdDomain: entraIdDomain
+    domainStrategy: domainStrategy
     tags: union(commonTags, { role: 'domain-controller' })
+  }
+}
+
+// --- Entra Connect Sync Server (dedicated VM, Tier 1) ------------------------
+
+module entraConnectVm 'modules/compute/vm.bicep' = if (deployEntraConnectVm) {
+  name: 'deploy-entra-connect'
+  scope: rgId
+  params: {
+    vmName: vmNameEntraConnect
+    location: location
+    vmSize: sizeManagement
+    subnetId: vnet.outputs.snetAdId
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: entraConnectIp
+    tags: union(commonTags, { role: 'entra-connect' })
   }
 }
 
@@ -432,6 +486,36 @@ module promoteDc02 'modules/identity/replicaDC.bicep' = {
     adminPassword: adminPassword
     dsrmPassword: adminPassword
     tags: union(commonTags, { role: 'domain-controller' })
+  }
+}
+
+// --- Domain Join: Entra Connect VM (always joined -- Entra Connect requires AD membership)
+
+module djEntraConnect 'modules/identity/domainJoin.bicep' = if (deployEntraConnectVm) {
+  name: 'deploy-dj-entra-connect'
+  scope: rgId
+  dependsOn: [entraConnectVm, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameEntraConnect
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=App Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+// --- Install Entra Connect Sync on target VM ---------------------------------
+
+module installEntraConnect 'modules/identity/entraConnect.bicep' = if (enableEntraIntegration) {
+  name: 'deploy-install-entra-connect'
+  scope: rgId
+  dependsOn: deployEntraConnectVm ? [djEntraConnect] : [promoteDc02]
+  params: {
+    vmName: entraConnectTargetVm
+    location: location
+    tags: union(commonTags, { role: 'entra-connect' })
   }
 }
 
@@ -836,3 +920,5 @@ output dc02PrivateIp string = dc02.outputs.privateIpAddress
 output vpnGatewayName string = !empty(vpnRootCertData) ? vpnGateway.outputs.vpnGatewayName : 'not-deployed'
 
 output deploymentTierDeployed int = deploymentTier
+output entraIntegrationEnabled bool = enableEntraIntegration
+output entraConnectVmName string = deployEntraConnectVm ? entraConnectVm.outputs.vmName : (enableEntraIntegration ? dc02Name : 'not-deployed')

@@ -42,6 +42,12 @@
     Skip the AD DS registration step.  Useful for redeploying infrastructure
     without re-running the AD registration (e.g., if already registered).
 
+.PARAMETER EnableEntraKerberos
+    Use Entra ID Kerberos authentication instead of on-prem AD DS registration.
+    This eliminates the need to register the storage account as a computer object
+    in AD.  Requires Entra Connect Sync with Password Hash Sync configured.
+    Identities must be synced from on-prem AD to Entra ID.
+
 .PARAMETER DomainName
     FQDN of the lab AD domain.  Default: <LabBaseName>.local (e.g., tst10.local
     becomes azlab.local — override if your domain name differs from the lab
@@ -83,6 +89,8 @@ param(
     [string]$SubscriptionId,
 
     [switch]$SkipADDS,
+
+    [switch]$EnableEntraKerberos,
 
     [string]$DomainName,
 
@@ -385,9 +393,54 @@ Write-Host "  Storage Account   : $stgName" -ForegroundColor White
 Write-Host "  File Share        : $shareName" -ForegroundColor White
 
 # =============================================================================
+# 6a. Entra ID Kerberos Authentication (alternative to AD DS registration)
+# =============================================================================
+if ($EnableEntraKerberos) {
+    Write-Header "Entra ID Kerberos Authentication"
+    Write-Host "   Configuring storage account for Entra ID Kerberos auth..." -ForegroundColor White
+    Write-Host "   This eliminates the need for AD DS computer-account registration." -ForegroundColor Gray
+
+    # Get the Entra ID tenant ID to use as the domain GUID
+    $tenantId = az account show --query tenantId -o tsv 2>&1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tenantId)) {
+        Write-Fail "Could not determine Entra ID tenant ID."
+        exit 1
+    }
+    $tenantId = $tenantId.Trim()
+
+    # Determine the Entra ID domain — query the tenant's default domain
+    $entraDefaultDomain = az rest --method GET `
+        --url "https://graph.microsoft.com/v1.0/organization" `
+        --query "value[0].verifiedDomains[?isDefault].name | [0]" -o tsv 2>&1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($entraDefaultDomain)) {
+        Write-Host "   Could not auto-detect Entra default domain." -ForegroundColor Yellow
+        $entraDefaultDomain = Read-Host "   Enter your Entra ID domain (e.g., usaavd.com)"
+    }
+    $entraDefaultDomain = $entraDefaultDomain.Trim()
+    Write-Ok "Entra ID domain: $entraDefaultDomain (tenant: $tenantId)"
+
+    # Configure storage account for Entra ID Kerberos
+    az storage account update `
+        --name $stgName `
+        --resource-group $rgName `
+        --enable-files-aadkerb true `
+        --domain-name $entraDefaultDomain `
+        --domain-guid $tenantId `
+        --default-share-permission StorageFileDataSmbShareContributor `
+        -o none 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Failed to configure Entra ID Kerberos on storage account."
+        exit 1
+    }
+    Write-Ok "Entra ID Kerberos authentication enabled"
+    Write-Host "   NOTE: Identities must be synced via Entra Connect (PHS) for Kerberos to work." -ForegroundColor Yellow
+    Write-Host "   Client VMs must be hybrid Entra ID joined or Entra ID joined." -ForegroundColor Yellow
+
+# =============================================================================
 # 7. AD DS Registration — Register storage account in on-premises Active Directory
 # =============================================================================
-if ($SkipADDS) {
+} elseif ($SkipADDS) {
     Write-Header "AD DS Registration — SKIPPED (-SkipADDS)"
 } elseif ([string]::IsNullOrWhiteSpace($LabBaseName)) {
     Write-Header "AD DS Registration — SKIPPED (no -LabBaseName)"
@@ -529,9 +582,9 @@ if ($SkipADDS) {
         exit 1
     }
 
-    # Parse the JSON result from the script stdout
-    $combinedOutput = "$stdout`n$stderr"
-    $jsonMatch = [regex]::Match($combinedOutput, 'AD_REGISTRATION_RESULT=(.+)')
+    # Parse the JSON result from the script stdout only (not stderr,
+    # which can contain parse-error lines echoing source code).
+    $jsonMatch = [regex]::Match($stdout, 'AD_REGISTRATION_RESULT=(.+)')
     if (-not $jsonMatch.Success) {
         Write-Fail "Could not parse AD registration output."
         Write-Host "   --- DC01 stdout ---" -ForegroundColor Gray
@@ -542,7 +595,19 @@ if ($SkipADDS) {
         exit 1
     }
 
-    $adInfo = $jsonMatch.Groups[1].Value | ConvertFrom-Json
+    $capturedJson = $jsonMatch.Groups[1].Value
+    try {
+        $adInfo = $capturedJson | ConvertFrom-Json
+    } catch {
+        Write-Fail "Failed to parse AD registration JSON."
+        Write-Host "   captured value: $capturedJson" -ForegroundColor Gray
+        Write-Host "   --- DC01 stdout ---" -ForegroundColor Gray
+        if ($stdout) { ($stdout -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray } }
+        Write-Host "   --- DC01 stderr ---" -ForegroundColor Gray
+        if ($stderr) { ($stderr -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Red } }
+        Write-Host "   --- end ---" -ForegroundColor Gray
+        exit 1
+    }
     Write-Ok "Computer account: $($adInfo.computerName)"
     Write-Ok "SPN: $($adInfo.spn)"
     Write-Ok "Azure Storage SID: $($adInfo.azureStorageSid)"
@@ -560,6 +625,8 @@ if ($SkipADDS) {
         --domain-guid $adInfo.domainGuid `
         --domain-sid $adInfo.domainSid `
         --azure-storage-sid $adInfo.azureStorageSid `
+        --sam-account-name $adInfo.computerName `
+        --account-type Computer `
         --default-share-permission StorageFileDataSmbShareContributor `
         -o none 2>&1
 
@@ -568,6 +635,24 @@ if ($SkipADDS) {
         exit 1
     }
     Write-Ok "AD DS authentication enabled on storage account"
+
+    # --- Restart KDC on DC02 to flush cached key material ---
+    # The Register script restarted DC01's KDC after ktpass set the AES key.
+    # DC02 received the new key via replication but its KDC may still cache the
+    # old AES key.  A KDC restart ensures all DCs issue valid service tickets.
+    $dc02VmName = "$LabBaseName-dc02"
+    Write-Step "Flushing KDC cache on DC02..."
+    az vm run-command invoke `
+        --resource-group $labRgIdentity `
+        --name $dc02VmName `
+        --command-id RunPowerShellScript `
+        --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
+        --query "value[0].message" -o tsv 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "DC02 KDC cache flushed"
+    } else {
+        Write-Host "   Warning: could not restart KDC on DC02. SMB mount may fail from some VMs until DC02 caches refresh." -ForegroundColor Yellow
+    }
 
     # --- Disable shared key access again ---
     Write-Step "Re-disabling shared key data-plane access..."

@@ -13,7 +13,7 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 │  ┌─────────────────────┐  ┌────────────────────────────────────────────┐ │
 │  │ AzureBastionSubnet  │  │ snet-ad (10.0.1.0/24)                     │ │
 │  │ 10.0.0.0/26         │  │   DC01 (10.0.1.4)  DC02 (10.0.1.5)       │ │
-│  │   Azure Bastion     │  │                                            │ │
+│  │   Azure Bastion     │  │   EntraConnect*     MgmtVM*               │ │
 │  └─────────────────────┘  └────────────────────────────────────────────┘ │
 │                                                                          │
 │  ┌─────────────────────┐  ┌────────────────────────────────────────────┐ │
@@ -46,9 +46,11 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+> **\*** *EntraConnect is deployed only when `enableEntraIntegration=true` and `entraConnectPlacement='dedicated'` (otherwise Entra Connect installs on DC02). MgmtVM is deployed separately via `deploy-mgmt.ps1` after the main lab deployment completes.*
+
 ### VM Inventory
 
-The lab deploys up to **11 VMs** (or fewer with `colocateSql`).
+The lab deploys up to **11 VMs** (or fewer with `colocateSql`), plus up to **2 additional VMs** when Entra ID integration is enabled.
 All MCM and SQL VM names are **customizable** at deploy time via an interactive naming prompt or Bicep parameters.
 
 #### Default Layout — Separate SQL (11 VMs)
@@ -66,6 +68,17 @@ All MCM and SQL VM names are **customizable** at deploy time via an interactive 
 | `{base}-prma` | MCM Child Primary A | Standard_D4s_v5 | snet-main | 3 |
 | `{base}-prmb` | MCM Child Primary B | Standard_D4s_v5 | snet-site1 | 3 |
 | `{base}-prmc` | MCM Child Primary C | Standard_D4s_v5 | snet-site2 | 3 |
+
+**Entra ID Integration VMs** (deployed when `enableEntraIntegration=true`):
+
+| Default Name | Role | Size | Subnet | Tier |
+|--------------|------|------|--------|------|
+| `{base}-entr` | Entra Connect Sync* | Standard_D2s_v5 | snet-ad | 1 |
+| `{base}-mgmt` | Management VM (Entra ID joined)** | Standard_D2s_v5 | snet-ad | Post |
+
+\* Only deployed when `entraConnectPlacement='dedicated'`. Otherwise Entra Connect installs on DC02.
+
+\*\* Deployed separately via `deploy-mgmt.ps1` after the main lab is running.
 
 #### Colocated SQL Layout — SQL on MCM Servers (8 VMs)
 
@@ -94,6 +107,15 @@ When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as
 | **Bicep CLI** | (bundled with Az CLI) | `az bicep version` |
 | **Azure Subscription** | — | `az account list -o table` |
 | **RBAC** | Contributor on subscription | `az role assignment list --assignee <upn>` |
+
+### Entra ID Integration Prerequisites (optional)
+
+| Requirement | Notes |
+|-------------|-------|
+| **Entra ID tenant** | Any tenant — the code is not tied to a specific domain |
+| **Azure AD Premium P2 license** | Required for Entra Connect Sync + Entra ID device login |
+| **Global Administrator** | Needed during the Entra Connect wizard (post-deployment) |
+| **Custom domain (recommended)** | Register your domain in Entra ID → Custom domain names |
 
 ### VM Quota Requirements
 
@@ -211,6 +233,15 @@ cd "Azure Lab"
 # Preview changes without deploying
 .\deploy.ps1 -BaseName azlab -Location eastus -WhatIf
 
+# Deploy with Entra ID hybrid identity integration
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -EnableEntraIntegration -EntraIdDomain contoso.com
+
+# Deploy with Entra Connect on a dedicated VM (default: installs on DC02)
+.\deploy.ps1 -BaseName azlab -Location eastus -EnableEntraIntegration -EntraIdDomain contoso.com -EntraConnectPlacement dedicated
+
+# Deploy with independent AD domain (not a subdomain of Entra ID domain)
+.\deploy.ps1 -BaseName azlab -Location eastus -EnableEntraIntegration -EntraIdDomain contoso.com -DomainStrategy independent -DomainName azlab.local
+
 # Deploy to a specific subscription
 .\deploy.ps1 -BaseName azlab -Location eastus -SubscriptionId "00000000-0000-0000-0000-000000000000"
 ```
@@ -286,9 +317,11 @@ az deployment sub show --name <deployment-name> --query properties.outputs
 Azure-Lab/
 ├── README.md                              # This file
 ├── deploy.ps1                             # PowerShell wrapper (prereqs, incremental detection, naming, deploy)
+├── deploy-mgmt.ps1                        # Standalone: deploy management VM (Entra ID joined)
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
 ├── Set-VpnDnsConfig.ps1                   # Helper: configure DNS NRPT rules for VPN private endpoint access
-├── main.bicep                             # Subscription-scoped orchestrator
+├── main.bicep                             # Subscription-scoped orchestrator (AD lab infrastructure)
+├── mgmt.bicep                             # Resource-group-scoped: management VM + Entra ID join
 ├── bicepconfig.json                       # Bicep linter / analyzer config
 ├── MECM-Azure-Global-Lab.ps1              # Original PowerShell script (reference)
 ├── certs/                                 # Auto-generated VPN certificates
@@ -316,8 +349,14 @@ Azure-Lab/
         ├── configureAD.bicep              # RunCommand: OUs, groups, svc accounts, gMSA
         ├── replicaDC.bicep                # CSE: Promote DC02 as replica DC
         ├── domainJoin.bicep               # JsonADDomainExtension: join VM to AD domain
+        ├── entraConnect.bicep             # RunCommand: Install Entra Connect Sync
+        ├── entraIdJoin.bicep              # AADLoginForWindows extension (Entra ID join)
+        ├── managementTools.bicep          # RunCommand: Install RSAT, Az module, Azure CLI
+        ├── vmLoginRbac.bicep              # RBAC: Virtual Machine Administrator Login
         └── scripts/
-            └── Configure-AD.ps1           # AD configuration script (loaded inline)
+            ├── Configure-AD.ps1           # AD configuration script (loaded inline)
+            ├── Install-EntraConnect.ps1   # Download + silent install Entra Connect
+            └── Install-ManagementTools.ps1 # RSAT, Az module, SqlServer, Azure CLI
 ```
 
 ---
@@ -338,6 +377,10 @@ Azure-Lab/
 | `-SubscriptionId` | string | (current) | Target Azure subscription ID |
 | `-WhatIf` | switch | `$false` | Preview deployment changes without applying |
 | `-Destroy` | switch | `$false` | Delete all lab resource groups |
+| `-EnableEntraIntegration` | switch | `$false` | Enable Entra ID hybrid identity (Entra Connect, management VM, Entra ID join) |
+| `-EntraIdDomain` | string | (prompt) | Entra ID verified domain (e.g., `contoso.com`) |
+| `-DomainStrategy` | string | `subdomain` | `subdomain` = AD domain is `ad.<EntraIdDomain>`, `independent` = AD domain configured separately |
+| `-EntraConnectPlacement` | string | `dc02` | `dc02` = install Entra Connect on DC02, `dedicated` = deploy a separate Entra Connect VM |
 
 ### Bicep Template Parameters (main.bicep)
 
@@ -385,6 +428,14 @@ Azure-Lab/
 | `imageOffer` | string | `WindowsServer` | OS image offer |
 | `imageSku` | string | `2022-datacenter-g2` | OS image SKU |
 | `envTag` | string | `lab` | Environment tag value |
+| **Entra ID Integration** | | | |
+| `enableEntraIntegration` | bool | `false` | Enable Entra ID hybrid identity features |
+| `entraIdDomain` | string | `''` | Entra ID verified domain (e.g., `contoso.com`) |
+| `domainStrategy` | string | `subdomain` | `subdomain` = AD domain is `ad.<entraIdDomain>`, `independent` = separate names |
+| `entraConnectPlacement` | string | `dc02` | `dc02` = install on DC02, `dedicated` = separate VM |
+| `vmNameMgmt` | string | `{base}-mgmt` | Management VM name (Entra ID joined) |
+| `vmNameEntraConnect` | string | `{base}-entr` | Entra Connect VM name (when placement = dedicated) |
+| `sizeManagement` | string | `Standard_D2s_v5` | VM size for Management VM and Entra Connect VM |
 
 ---
 
@@ -473,9 +524,10 @@ AD DS is automatically configured during Tier 1 deployment:
 - **OUs**: Lab Accounts > Service Accounts, Lab Accounts > Admins, Lab Groups, Lab Servers > SQL Servers + App Servers
 - **Security Groups**: GRP-DomainAdmins-Lab, GRP-SQLAdmins, GRP-AppAdmins, GRP-ServerAdmins, GRP-DomainJoin
 - **Service Accounts** (OU=Service Accounts): svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa
-- **Admin Accounts** (OU=Admins): mcm-admin (member of GRP-AppAdmins + GRP-DomainAdmins-Lab)
+- **Admin Accounts** (OU=Admins): lab-admin (delegated OU admin, member of GRP-ServerAdmins + GRP-SQLAdmins + GRP-AppAdmins + GRP-MCMAdmins), mcm-admin, sql-admin
 - **gMSA**: gmsa-sqlsvc (for SQL Server, retrieve principals: GRP-SQLAdmins)
 - **Domain-join delegation**: svc-domjoin has CreateChild + WriteProperty on CN=Computers
+- **OU delegation**: lab-admin has GenericAll on Lab Servers, Lab Accounts, Lab Groups OUs
 - **DNS Forwarder**: `168.63.129.16` (Azure-provided DNS) configured on both DCs so VMs can resolve public hostnames
 
 > **Note:** After DC promotion, VMs may need a restart to pick up the custom DNS settings. DCs reboot automatically after promotion.
@@ -490,6 +542,116 @@ By default, all SQL and MCM VMs are **automatically domain-joined** during deplo
 - The extension depends on AD configuration completing first (OUs and svc-domjoin must exist)
 
 If you deployed with `-SkipDomainJoin` (or `joinDomain=false`), VMs remain in a workgroup. You can domain-join them manually later using the `svc-domjoin` account.
+
+### 3a. Entra Connect Sync Setup (when `-EnableEntraIntegration`)
+
+Entra Connect is **installed automatically** during deployment, but the configuration wizard requires interactive Global Admin authentication. Use **Custom installation** (not Express) to configure OU filtering.
+
+#### Initial Configuration
+
+1. **Connect** to the Entra Connect VM (or DC02, depending on `entraConnectPlacement`) via Bastion
+2. **Launch** the Entra Connect wizard from the desktop shortcut
+3. **Accept** the license terms, click Continue
+4. **Click "Customize"** (not Express Settings) — this enables OU filtering
+5. **Install prerequisites**: Click "Install" (no optional components needed for the lab)
+6. **User Sign-in**: Select **"Password Hash Synchronization"**, click Next
+7. **Connect to Azure AD**: Sign in with an Entra ID **Global Administrator** account
+8. **Connect Directories**:
+   - Forest: `<domainName>` → click "Add Directory"
+   - Select "Create new AD account"
+   - Enter Enterprise Admin credentials: `<domain>\labadmin` with the admin password from Key Vault
+9. **Azure AD sign-in configuration**: Verify the UPN suffix is shown and configured, click Next
+   - **Subdomain mode** (`domainStrategy=subdomain`): AD domain is `ad.<entraIdDomain>` — the Entra ID domain should show as a verified UPN suffix
+   - **Independent mode** (`domainStrategy=independent`): The Entra ID domain was added as an alternate UPN suffix in AD — verify it shows as "Verified"
+10. **Domain and OU filtering**: Select **"Sync selected domains and OUs"**
+    - Uncheck all OUs, then check **only**:
+      - ☑ `Lab Accounts`
+      - ☑ `Lab Groups`
+      - ☑ `Lab Servers`
+11. **Uniquely identifying users**: Keep defaults (users are represented once, match by mail attribute), click Next
+12. **Filter users and devices**: Keep "Synchronize all users and devices", click Next
+13. **Optional features**: "Password hash synchronization" should already be checked
+    - No additional features are needed for the lab
+    - Optional: Check "Password writeback" if you want Entra ID SSPR to write back to AD
+14. **Click "Install"** to start configuration and initial sync
+15. **Wait** for synchronization to complete (typically 2–5 minutes)
+
+> **Verify sync**: Azure Portal → Entra ID → Users — you should see the synced AD accounts (lab-admin, mcm-admin, sql-admin, service accounts).
+
+#### Optional: Hybrid Entra ID Join (after initial sync)
+
+To allow domain-joined lab VMs to also register in Entra ID (hybrid join):
+
+1. Re-open the Entra Connect wizard → **Configure** → **Device options**
+2. Select **"Configure Hybrid Microsoft Entra ID join"**
+3. Authenticate with Global Administrator credentials
+4. Check **"Windows 10 or later domain-joined devices"**
+5. Select your forest → click **Configure** to set the SCP (Service Connection Point)
+6. Enter Enterprise Admin credentials when prompted
+7. Click **Configure** to apply
+
+After configuration, domain-joined VMs will automatically register in Entra ID on their next reboot or policy refresh.
+
+#### Artifacts Storage (Azure Files)
+
+Deploy the `ArtifactsStorage` project to create a private Azure Files share for ISOs, installers, and configuration files. Two authentication modes are available — choose based on your needs:
+
+**Option 1 — AD DS Registration (default, recommended for labs):**
+```powershell
+cd ../ArtifactsStorage
+.\deploy.ps1 -NamePrefix artifacts -Location <region> -LabBaseName <base>
+```
+- Registers the storage account as a computer object in AD (runs on DC01)
+- **All domain-joined VMs** (including DCs) can mount via `net use` — any domain user works
+- Management VM (Entra ID joined) accesses via `az storage file --auth-mode login` (OAuth)
+
+**Option 2 — Entra ID Kerberos (`-EnableEntraKerberos`):**
+```powershell
+.\deploy.ps1 -NamePrefix artifacts -Location <region> -LabBaseName <base> -EnableEntraKerberos
+```
+- No AD computer account created
+- **Requires**: PHS enabled in Entra Connect + Hybrid Entra ID Join on client VMs
+- SMB `net use` only works from Hybrid Entra ID joined VMs, logged in as a **synced user** (e.g., `lab-admin`)
+- **DCs cannot mount** via SMB (DCs cannot be hybrid joined) — use `az storage file --auth-mode login` instead
+- The built-in `labadmin` account (in `CN=Users`) is never synced and cannot mount via Kerberos
+- Management VM (Entra ID joined) accesses via `az storage file --auth-mode login` (OAuth)
+
+**Access summary by VM type:**
+
+| VM Type | AD DS mode (`net use`) | Entra Kerberos mode (`net use`) | OAuth (`az storage file --auth-mode login`) |
+|---------|----------------------|-------------------------------|-------------------------------------------|
+| Domain-joined VMs (SQL, MCM) | **Yes** — any domain user | **Only if** Hybrid Entra ID joined + synced user | Yes (with Az CLI + RBAC) |
+| Domain Controllers | **Yes** — any domain user | **No** — DCs cannot be hybrid joined | Yes (with Az CLI + RBAC) |
+| Management VM (Entra joined) | **No** — not domain-joined | **Yes** — has PRT, synced user | **Yes** — recommended path |
+| VPN workstation | **No** — not domain-joined | **No** — not domain/hybrid joined | **Yes** — recommended path |
+
+> **Recommendation**: Use AD DS registration for labs. It works with every domain-joined VM (including DCs) with zero extra config. The management VM and VPN workstations use `az storage file --auth-mode login` regardless of which mode is chosen.
+
+### 3b. Management VM (separate deployment)
+
+The Management VM (`{base}-mgmt`) is deployed **separately** via `deploy-mgmt.ps1` after the main lab deployment completes. This ensures the AD infrastructure (DCs, DNS forwarders) is fully operational before the Entra ID join is attempted.
+
+```powershell
+# Deploy the management VM after the main lab is running
+.\deploy-mgmt.ps1 -BaseName <base> -Location <region>
+```
+
+The script automatically retrieves the admin password from Key Vault. The VM is **pure Entra ID joined** (not AD domain-joined) via the `AADLoginForWindows` extension and comes pre-installed with:
+- **RSAT**: AD Users & Computers, DNS Manager, Group Policy Management
+- **Az PowerShell module**
+- **SqlServer PowerShell module**
+- **Azure CLI**
+
+**Login**: Connect via Bastion using your **Entra ID credentials** (the deployer is assigned the `Virtual Machine Administrator Login` role automatically).
+
+**Managing AD from a non-domain-joined VM**: The `lab-admin` account is created during AD configuration with delegated full control over the Lab OUs (`Lab Servers`, `Lab Accounts`, `Lab Groups`). It is **not** a Domain Admin — it has only the permissions needed to manage lab infrastructure. To use RSAT tools:
+
+```powershell
+# Launch AD Users & Computers with AD credentials
+runas /netonly /user:yourdomain.lab\lab-admin "mmc dsa.msc"
+```
+
+Alternatively, RSAT tools will prompt for credentials when you connect to a DC. The VNet DNS already points to the DCs (`10.0.1.4`, `10.0.1.5`), so AD is fully resolvable from the management VM.
 
 ### 4. VM Timezone (Automated)
 During deployment, the script prompts for a timezone (or accepts `-TimeZone`). After the Bicep deployment completes, the timezone is applied via `az vm run-command invoke` running `Set-TimeZone` on every deployed VM.
@@ -627,6 +789,10 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 | **Domain not reachable from DC02** | Verify DC01 promotion completed, DNS resolves the domain name |
 | **VM not domain-joined** | Ensure VMs have restarted after VNet DNS was set to DC IPs |
 | **Domain join extension failed** | Check the VM's extensions blade in the Azure Portal. The `JoinDomain` extension logs errors there. Verify DC01/DC02 are running, DNS resolves the domain, and `svc-domjoin` account exists in AD. |
+| **Entra Connect wizard fails** | Ensure the VM has internet access (NAT Gateway on snet-ad). Verify Global Admin credentials and that the Entra ID domain is verified. Check `C:\ProgramData\AADConnect\*.log`. |
+| **Entra ID join (AADLoginForWindows) failed** | Check the extension status in the Portal. VM must have internet access to reach `login.microsoftonline.com`. Ensure an AD P2 license is available. |
+| **Can't login to Management VM with Entra ID** | Verify the `Virtual Machine Administrator Login` RBAC role is assigned. Connect via Bastion and use `AzureAD\user@domain.com` format. |
+| **Entra Connect install failed** | Check RunCommand output in the Portal. The MSI download requires TLS 1.2 and internet access. Review `C:\WindowsTemp\EntraConnect-Install.log` on the target VM. |
 | **Password breaks az CLI on Windows** | The admin password charset avoids `&`, `%`, `^` which break cmd.exe argument parsing. If you see truncated parameter errors, regenerate with a fresh deploy. |
 
 ---
@@ -638,4 +804,7 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 - [Cloud Witness for WSFC Quorum](https://learn.microsoft.com/windows-server/failover-clustering/deploy-cloud-witness)
 - [Azure Bastion Documentation](https://learn.microsoft.com/azure/bastion/bastion-overview)
 - [Azure P2S VPN with Certificate Auth](https://learn.microsoft.com/azure/vpn-gateway/vpn-gateway-howto-point-to-site-resource-manager-portal)
+- [Microsoft Entra Connect Sync](https://learn.microsoft.com/entra/identity/hybrid/connect/how-to-connect-install-express)
+- [AADLoginForWindows VM Extension](https://learn.microsoft.com/entra/identity/devices/howto-vm-sign-in-azure-ad-windows)
+- [Azure Files Entra ID Kerberos Authentication](https://learn.microsoft.com/azure/storage/files/storage-files-identity-auth-azure-active-directory-enable)
 - [Bicep Documentation](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)

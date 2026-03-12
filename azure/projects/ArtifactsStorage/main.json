@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "4432551566903296884"
+      "templateHash": "11048206638641067745"
     }
   },
   "parameters": {
@@ -191,7 +191,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "13740164916107523407"
+              "templateHash": "13169060710644649367"
             }
           },
           "parameters": {
@@ -235,11 +235,18 @@
                 "description": "Enable on-premises AD DS authentication for SMB file shares"
               }
             },
+            "enableEntraKerberos": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Enable Entra ID Kerberos authentication for SMB file shares (alternative to AD DS)"
+              }
+            },
             "adDomainName": {
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "AD domain FQDN (e.g., azlab.local)"
+                "description": "AD domain FQDN (e.g., azlab.local) — used for both AD DS and Entra Kerberos modes"
               }
             },
             "adNetBiosDomainName": {
@@ -276,6 +283,13 @@
               "metadata": {
                 "description": "SID of the computer account created in AD for this storage account"
               }
+            },
+            "entraIdTenantId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Entra ID tenant GUID (used as domain GUID for Entra Kerberos)"
+              }
             }
           },
           "resources": [
@@ -300,7 +314,7 @@
                   "defaultAction": "Deny",
                   "bypass": "AzureServices"
                 },
-                "azureFilesIdentityBasedAuthentication": "[if(parameters('enableADDS'), createObject('directoryServiceOptions', 'AD', 'activeDirectoryProperties', createObject('domainName', parameters('adDomainName'), 'netBiosDomainName', parameters('adNetBiosDomainName'), 'forestName', parameters('adForestName'), 'domainGuid', parameters('adDomainGuid'), 'domainSid', parameters('adDomainSid'), 'azureStorageSid', parameters('adAzureStorageSid')), 'defaultSharePermission', 'StorageFileDataSmbShareContributor'), null())]"
+                "azureFilesIdentityBasedAuthentication": "[if(parameters('enableEntraKerberos'), createObject('directoryServiceOptions', 'AADKERB', 'activeDirectoryProperties', createObject('domainName', parameters('adDomainName'), 'domainGuid', parameters('entraIdTenantId')), 'defaultSharePermission', 'StorageFileDataSmbShareContributor'), if(parameters('enableADDS'), createObject('directoryServiceOptions', 'AD', 'activeDirectoryProperties', createObject('domainName', parameters('adDomainName'), 'netBiosDomainName', parameters('adNetBiosDomainName'), 'forestName', parameters('adForestName'), 'domainGuid', parameters('adDomainGuid'), 'domainSid', parameters('adDomainSid'), 'azureStorageSid', parameters('adAzureStorageSid')), 'defaultSharePermission', 'StorageFileDataSmbShareContributor'), null()))]"
               }
             },
             {

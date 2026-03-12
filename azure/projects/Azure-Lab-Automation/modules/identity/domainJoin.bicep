@@ -1,5 +1,5 @@
-// ============================================================================
-// Module: Domain Join — Join a Windows VM to an Active Directory domain
+﻿// ============================================================================
+// Module: Domain Join - Join a Windows VM to an Active Directory domain
 //
 // Uses the JsonADDomainExtension (Microsoft.Compute.JsonADDomainExtension)
 // to join the target VM to the specified AD domain.
@@ -47,9 +47,9 @@ param tags object = {}
 var domainJoinOptions = 3
 
 // ---------------------------------------------------------------------------
-// Step 1 — DNS Readiness Check (RunCommand)
+// Step 1 - DNS Readiness Check (RunCommand)
 // Flush the local DNS cache and poll until the domain's LDAP SRV record is
-// resolvable. Retries up to 30 times (10 s apart ≈ 5 min) before failing.
+// resolvable. Retries up to 30 times (10 s apart ~ 5 min) before failing.
 // ---------------------------------------------------------------------------
 resource dnsReadyCheck 'Microsoft.Compute/virtualMachines/runCommands@2024-03-01' = {
   name: '${vmName}/DnsReadyCheck'
@@ -73,7 +73,7 @@ resource dnsReadyCheck 'Microsoft.Compute/virtualMachines/runCommands@2024-03-01
             Clear-DnsClientCache
             $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue
             if ($srv) {
-                Write-Output "DNS ready on attempt $i — found DC: $($srv[0].NameTarget)"
+                Write-Output "DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)"
                 exit 0
             }
             Write-Output "Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s..."
@@ -93,7 +93,7 @@ resource dnsReadyCheck 'Microsoft.Compute/virtualMachines/runCommands@2024-03-01
 }
 
 // ---------------------------------------------------------------------------
-// Step 2 — Domain Join Extension
+// Step 2 - Domain Join Extension
 // Runs only after the DNS readiness check succeeds.
 // ---------------------------------------------------------------------------
 resource domainJoinExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' = {

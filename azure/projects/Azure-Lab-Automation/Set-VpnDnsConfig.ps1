@@ -89,9 +89,10 @@ function Test-IsAdmin {
 }
 
 function Test-VpnConnected {
-    # Check if the VPN adapter exists and has an IP address (adapter only appears when connected)
-    $adapter = Get-NetAdapter -Name $VpnName -ErrorAction SilentlyContinue
-    return ($null -ne $adapter -and $adapter.Status -eq 'Up')
+    # Azure P2S VPN connections create PPP/RAS interfaces that don't appear in
+    # Get-NetAdapter. Use Get-NetIPInterface which sees all interface types.
+    $iface = Get-NetIPInterface -InterfaceAlias $VpnName -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    return ($null -ne $iface -and $iface.ConnectionState -eq 'Connected')
 }
 
 function Add-NrptRules {
@@ -144,8 +145,8 @@ function Invoke-Install {
     $scriptPath = $MyInvocation.ScriptName
     if (-not $scriptPath) { $scriptPath = $PSCommandPath }
 
-    $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source
-    if (-not $pwshPath) { $pwshPath = (Get-Command powershell).Source }
+    $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    $pwshPath = if ($pwshCmd) { $pwshCmd.Source } else { (Get-Command powershell).Source }
 
     $taskAction = New-ScheduledTaskAction `
         -Execute $pwshPath `

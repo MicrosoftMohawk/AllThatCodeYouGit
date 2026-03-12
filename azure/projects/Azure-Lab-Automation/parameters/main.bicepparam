@@ -40,6 +40,17 @@ param deploymentTier = 3
 
 // --- Optional Overrides (uncomment to customize) -----------------------------
 
+// --- Entra ID Integration (Hybrid Identity) ----------------------------------
+// Enable to deploy Entra Connect Sync + Management VM with Entra ID login.
+// Prerequisites: Entra ID tenant, Azure AD P2 license, Global Admin credentials.
+// param enableEntraIntegration = true
+// param entraIdDomain = 'usaavd.com'
+// param domainStrategy = 'subdomain'          // 'subdomain' or 'independent'
+// param entraConnectPlacement = 'dedicated'    // 'dedicated' or 'dc02'
+// param vmNameMgmt = 'azlab-mgmt'
+// param vmNameEntraConnect = 'azlab-aadcs'
+// param sizeManagement = 'Standard_D2s_v5'
+
 // param adminUsername = 'labadmin'
 
 // param sizeDC = 'Standard_D2s_v5'

@@ -31,7 +31,10 @@ param tags object = {}
 @description('Enable on-premises AD DS authentication for SMB file shares')
 param enableADDS bool = false
 
-@description('AD domain FQDN (e.g., azlab.local)')
+@description('Enable Entra ID Kerberos authentication for SMB file shares (alternative to AD DS)')
+param enableEntraKerberos bool = false
+
+@description('AD domain FQDN (e.g., azlab.local) — used for both AD DS and Entra Kerberos modes')
 param adDomainName string = ''
 
 @description('AD NetBIOS domain name (e.g., AZLAB)')
@@ -48,6 +51,9 @@ param adDomainSid string = ''
 
 @description('SID of the computer account created in AD for this storage account')
 param adAzureStorageSid string = ''
+
+@description('Entra ID tenant GUID (used as domain GUID for Entra Kerberos)')
+param entraIdTenantId string = ''
 
 // ---------------------------------------------------------------------------
 // Storage Account — fully locked down
@@ -71,7 +77,14 @@ resource stg 'Microsoft.Storage/storageAccounts@2023-05-01' = {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
     }
-    azureFilesIdentityBasedAuthentication: enableADDS ? {
+    azureFilesIdentityBasedAuthentication: enableEntraKerberos ? {
+      directoryServiceOptions: 'AADKERB'
+      activeDirectoryProperties: {
+        domainName: adDomainName
+        domainGuid: entraIdTenantId
+      }
+      defaultSharePermission: 'StorageFileDataSmbShareContributor'
+    } : enableADDS ? {
       directoryServiceOptions: 'AD'
       activeDirectoryProperties: {
         domainName: adDomainName

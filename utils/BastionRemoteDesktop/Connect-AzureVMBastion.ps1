@@ -477,18 +477,86 @@ Write-Host "Connecting to VM via Azure Bastion native client..." -ForegroundColo
 if ($EntraIdLogin) {
     # Entra ID auth requires Bastion to broker the AAD token exchange, so we use
     # 'az network bastion rdp' directly — it handles tunneling + auth in one step.
+    $monitorMode = if ($UseAllMonitors.IsPresent) { "all monitors" } else { "single monitor" }
     Write-Host "✓ Using Entra ID authentication (az network bastion rdp --enable-mfa)" -ForegroundColor Green
+    Write-Host "✓ RDP configured for: $monitorMode" -ForegroundColor Green
     Write-Host "  A browser sign-in prompt will appear for Entra ID credentials" -ForegroundColor Cyan
     Write-Host ""
 
-    az network bastion rdp `
-        --name $BastionName `
-        --resource-group $bastionRG `
-        --target-resource-id $vmResourceId `
-        --enable-mfa true
+    $bastionArgs = @(
+        '--name', $BastionName,
+        '--resource-group', $bastionRG,
+        '--target-resource-id', $vmResourceId,
+        '--enable-mfa', 'true'
+    )
 
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "`n✗ Bastion RDP connection failed (exit code: $LASTEXITCODE)" -ForegroundColor Red
+    # az network bastion rdp generates a temp RDP file (conn_*.rdp in %TEMP%).
+    # mstsc may cache monitor settings between sessions, so the file may contain
+    # either multimon value regardless of what we want. We intercept the file with
+    # a compiled C# FileSystemWatcher that runs on the .NET ThreadPool — fast
+    # enough to patch the file before mstsc.exe reads it.
+    $desiredMultimon = [int]$UseAllMonitors.IsPresent
+
+    if (-not ([System.Management.Automation.PSTypeName]'BastionRdpMonitorPatcher').Type) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading;
+
+public class BastionRdpMonitorPatcher : IDisposable {
+    private FileSystemWatcher _watcher;
+    private int _desiredValue;
+
+    public BastionRdpMonitorPatcher(string watchPath, int desiredMultimon) {
+        _desiredValue = desiredMultimon;
+        _watcher = new FileSystemWatcher(watchPath, "conn_*.rdp");
+        _watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size;
+        _watcher.Created += PatchHandler;
+        _watcher.Changed += PatchHandler;
+    }
+
+    public void Start() { _watcher.EnableRaisingEvents = true; }
+
+    private void PatchHandler(object sender, FileSystemEventArgs e) {
+        string desired = "use multimon:i:" + _desiredValue;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 5000) {
+            try {
+                string text = File.ReadAllText(e.FullPath);
+                if (text.Contains(desired)) return;
+                string patched = Regex.Replace(text, @"use multimon:i:\d", desired);
+                if (patched != text) {
+                    File.WriteAllText(e.FullPath, patched);
+                    return;
+                }
+            } catch { }
+            Thread.Sleep(1);
+        }
+    }
+
+    public void Dispose() {
+        if (_watcher != null) {
+            _watcher.EnableRaisingEvents = false;
+            _watcher.Dispose();
+            _watcher = null;
+        }
+    }
+}
+"@
+    }
+
+    $rdpPatcher = [BastionRdpMonitorPatcher]::new($env:TEMP, $desiredMultimon)
+    $rdpPatcher.Start()
+
+    az network bastion rdp @bastionArgs
+
+    $exitCode = $LASTEXITCODE
+
+    $rdpPatcher.Dispose()
+
+    if ($exitCode -ne 0) {
+        Write-Host "`n✗ Bastion RDP connection failed (exit code: $exitCode)" -ForegroundColor Red
         Write-Host "`nPossible causes:" -ForegroundColor Yellow
         Write-Host "  - Bastion tunneling/native client may not be enabled" -ForegroundColor Gray
         Write-Host "  - Azure CLI authentication may have expired (try: az login)" -ForegroundColor Gray

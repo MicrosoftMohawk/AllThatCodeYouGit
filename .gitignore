@@ -1,0 +1,5 @@
+# Temp/scratch scripts
+ktfix*.ps1
+
+# AD diagnostic output
+adresult.json

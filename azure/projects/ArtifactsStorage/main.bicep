@@ -144,8 +144,8 @@ module privateEndpoint 'modules/privateEndpoint.bicep' = {
 }
 
 // =============================================================================
-// RBAC: Storage File Data SMB Share Contributor for deployer
-// Role ID: 0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb
+// RBAC: Storage File Data Privileged Contributor for deployer
+// Role ID: 69566ab7-960f-475b-8e7c-b3118f30c6bd
 // =============================================================================
 
 module rbac 'modules/rbacAssignment.bicep' = if (!empty(deployerObjectId)) {

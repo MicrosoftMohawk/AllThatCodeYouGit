@@ -57,6 +57,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Normalise DnsServers: in -File mode, comma-separated values arrive as a single
+# string ("10.0.1.4,10.0.1.5") instead of a proper [string[]]. Split them.
+$DnsServers = $DnsServers | ForEach-Object { $_ -split ',' } | Where-Object { $_ }
+
 # ─── Constants ───────────────────────────────────────────────────────────────
 
 $VpnName  = "${BaseName}-vnet"

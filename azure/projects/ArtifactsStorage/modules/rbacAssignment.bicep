@@ -1,8 +1,10 @@
 // ============================================================================
-// Module: RBAC Assignment — Storage File Data SMB Share Contributor
-// Grants a user or group the ability to read/write files on the share via
-// Entra ID authentication (SMB or REST).
-// Role ID: 0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb
+// Module: RBAC Assignment — Storage File Data Privileged Contributor
+// Grants a user or group full read/write/delete access to file shares via
+// Entra ID authentication (SMB and REST).  The "Privileged" role is required
+// for REST/OAuth clients like Azure Storage Explorer that send the
+// x-ms-file-request-intent: backup header.
+// Role ID: 69566ab7-960f-475b-8e7c-b3118f30c6bd
 // ============================================================================
 
 @description('Name of the storage account to scope the role to')
@@ -17,7 +19,7 @@ param principalType string = 'User'
 
 var roleDefinitionId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
-  '0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb'
+  '69566ab7-960f-475b-8e7c-b3118f30c6bd'
 )
 
 resource stg 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
@@ -25,7 +27,7 @@ resource stg 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
 }
 
 resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(stg.id, principalId, '0c867c2a-1d8c-454a-a3db-ab2ea1bdc8bb')
+  name: guid(stg.id, principalId, '69566ab7-960f-475b-8e7c-b3118f30c6bd')
   scope: stg
   properties: {
     roleDefinitionId: roleDefinitionId

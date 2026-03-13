@@ -280,7 +280,7 @@ $PrincipalType = 'User'
 
 Write-Step "RBAC assignment for file share access..."
 Write-Host "   Enter a user (UPN) or Entra ID group name to grant file share access." -ForegroundColor White
-Write-Host "   This grants Storage File Data SMB Share Contributor on the share." -ForegroundColor Gray
+Write-Host "   This grants Storage File Data Privileged Contributor on the share." -ForegroundColor Gray
 Write-Host "   Leave blank to skip (you can assign RBAC manually later)." -ForegroundColor Gray
 $rbacInput = Read-Host "   User UPN or Group name"
 
@@ -652,6 +652,142 @@ if ($EnableEntraKerberos) {
         Write-Ok "DC02 KDC cache flushed"
     } else {
         Write-Host "   Warning: could not restart KDC on DC02. SMB mount may fail from some VMs until DC02 caches refresh." -ForegroundColor Yellow
+    }
+
+    # --- Verify Kerberos SMB mount from a domain-joined VM ---
+    # The AES-256 key derived by the DC (based on the ktpass salt/UPN) must
+    # match the key Azure Files holds (kerb1).  A mismatch causes error 1396
+    # "The target account name is incorrect" at mount time.  This has bitten
+    # us multiple times, so we verify end-to-end before declaring success.
+    $labRgMain = "$LabBaseName-rg-main"
+    $testVm    = "$LabBaseName-cas"
+
+    Write-Step "Verifying Kerberos SMB authentication from $testVm..."
+    $testVmState = az vm get-instance-view -g $labRgMain -n $testVm `
+        --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]" `
+        -o tsv 2>&1
+
+    if ($LASTEXITCODE -ne 0 -or $testVmState -notmatch 'running') {
+        Write-Host "   VM '$testVm' not available (state: $testVmState). Skipping Kerberos verification." -ForegroundColor Yellow
+        Write-Host "   Verify manually: net use Z: \\$stgName.file.core.windows.net\$shareName" -ForegroundColor Yellow
+    } else {
+        Write-Ok "Test VM: $testVm ($labRgMain)"
+
+        $kerbVerifyScript = Join-Path ([System.IO.Path]::GetTempPath()) `
+            "Verify-KerbMount-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+
+        # Build the mount-test script.  $stgName / $shareName are expanded now;
+        # everything else stays literal inside the remote script.
+        $kerbVerifyContent = @"
+klist purge 2>&1 | Out-Null
+net use * /delete /y 2>&1 | Out-Null
+Start-Sleep -Seconds 2
+`$r = net use Z: "\\$stgName.file.core.windows.net\$shareName" 2>&1
+Write-Host "MOUNT_EXIT=`$LASTEXITCODE"
+`$r | ForEach-Object { Write-Host `$_ }
+net use Z: /delete 2>&1 | Out-Null
+"@
+
+        $kerbVerified = $false
+        $maxRetries   = 1
+
+        for ($attempt = 0; $attempt -le $maxRetries; $attempt++) {
+
+            # ── On retry: regenerate kerb key → re-register in AD → flush KDCs ──
+            if ($attempt -gt 0) {
+                Write-Step "Retry $attempt/$maxRetries — regenerating Kerberos key and re-registering in AD..."
+
+                az storage account keys renew `
+                    --account-name $stgName -g $rgName `
+                    --key key1 --key-type kerb -o none 2>&1
+                $kerbKey = (az storage account keys list `
+                    --account-name $stgName -g $rgName `
+                    --query "[?keyName=='kerb1'].value" -o tsv 2>&1).Trim()
+
+                if ([string]::IsNullOrWhiteSpace($kerbKey)) {
+                    Write-Fail "Could not retrieve new Kerberos key. Aborting verification."
+                    break
+                }
+
+                # Re-run the AD registration script with the fresh key
+                $retryScriptContent = Get-Content $adScriptPath -Raw
+                $retryScriptContent = $retryScriptContent -replace '(?s)<#.*?#>\s*', ''
+                $retryScriptContent = $retryScriptContent -replace '(?sm)param\s*\(.*?^\)\s*', ''
+                $retryPreamble = @"
+`$StorageAccountName = '$($stgName -replace "'","''")'
+`$StorageKerbKey = '$($kerbKey -replace "'","''")'
+`$DomainName = '$($DomainName -replace "'","''")'
+`$OUPath = ''
+
+"@
+                $retryScriptContent = $retryPreamble + $retryScriptContent
+                $retryScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) `
+                    "Register-StorageInAD-retry-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+                $retryScriptContent | Set-Content -Path $retryScriptPath -Encoding UTF8 -NoNewline
+
+                $retryResult = az vm run-command invoke `
+                    -g $labRgIdentity -n $dcVmName `
+                    --command-id RunPowerShellScript `
+                    --scripts "@$retryScriptPath" `
+                    --query "value[0].message" -o tsv 2>&1
+                Remove-Item $retryScriptPath -Force -ErrorAction SilentlyContinue
+
+                if ($retryResult -notmatch 'AD_REGISTRATION_RESULT=') {
+                    Write-Fail "AD re-registration failed on DC01."
+                    $retryResult -split "`n" | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray }
+                    break
+                }
+                Write-Ok "AD re-registration succeeded"
+
+                # Restart KDC on both DCs
+                az vm run-command invoke -g $labRgIdentity -n $dcVmName `
+                    --command-id RunPowerShellScript `
+                    --scripts "Restart-Service kdc -Force" `
+                    --query "value[0].message" -o tsv 2>&1 | Out-Null
+                az vm run-command invoke -g $labRgIdentity -n $dc02VmName `
+                    --command-id RunPowerShellScript `
+                    --scripts "Restart-Service kdc -Force" `
+                    --query "value[0].message" -o tsv 2>&1 | Out-Null
+                Write-Ok "KDC restarted on both DCs"
+
+                Start-Sleep -Seconds 5
+            }
+
+            # ── Run the mount test ───────────────────────────────────────────
+            $kerbVerifyContent | Set-Content -Path $kerbVerifyScript -Encoding UTF8 -NoNewline
+
+            Write-Step "$(if ($attempt -eq 0) { 'Testing' } else { 'Re-testing' }) Kerberos SMB mount from $testVm..."
+            $verifyResult = az vm run-command invoke `
+                -g $labRgMain -n $testVm `
+                --command-id RunPowerShellScript `
+                --scripts "@$kerbVerifyScript" `
+                --query "value[0].message" -o tsv 2>&1
+
+            if ($verifyResult -match 'MOUNT_EXIT=0') {
+                Write-Ok "Kerberos SMB mount verified — AES-256 keys are correct"
+                $kerbVerified = $true
+                break
+            }
+
+            if ($attempt -lt $maxRetries) {
+                Write-Fail "Mount failed (AES-256 key mismatch likely) — will retry with fresh key"
+            } else {
+                Write-Fail "Mount failed after $($maxRetries + 1) attempts"
+            }
+            $verifyResult -split "`n" | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray }
+        }
+
+        Remove-Item $kerbVerifyScript -Force -ErrorAction SilentlyContinue
+
+        if (-not $kerbVerified) {
+            Write-Host ""
+            Write-Host "   WARNING: Kerberos SMB verification failed. Error 1396 is likely." -ForegroundColor Red
+            Write-Host "   This means the AES-256 key in AD does not match what Azure Files expects." -ForegroundColor Red
+            Write-Host "   Debug steps:" -ForegroundColor Yellow
+            Write-Host "     1. RDP to $testVm → net use Z: \\$stgName.file.core.windows.net\$shareName" -ForegroundColor Gray
+            Write-Host "     2. On DC01: Get-ADComputer -Filter {SamAccountName -like '$($stgName.Substring(0,15))*'} -Properties userPrincipalName, msDS-SupportedEncryptionTypes, PasswordLastSet | Format-List" -ForegroundColor Gray
+            Write-Host "     3. Re-run: .\deploy.ps1 -NamePrefix $NamePrefix -Location $Location -LabBaseName $LabBaseName" -ForegroundColor Gray
+        }
     }
 
     # --- Disable shared key access again ---

@@ -144,6 +144,9 @@ param aoagListenerIp string = '10.0.40.10'
 @description('Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone).')
 param existingFileDnsZoneId string = ''
 
+@description('Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the Key Vault PE skips DNS zone and VNet link creation to avoid conflicts.')
+param existingKvDnsZoneId string = ''
+
 // --- OS Image ----------------------------------------------------------------
 
 // --- Colocated SQL+MCM option -------------------------------------------------
@@ -373,6 +376,7 @@ module keyVaultPe 'modules/security/keyVaultPrivateEndpoint.bicep' = {
     keyVaultName: keyVault.outputs.keyVaultName
     subnetId: vnet.outputs.snetPeId
     vnetId: vnet.outputs.vnetId
+    existingPrivateDnsZoneId: existingKvDnsZoneId
     location: location
     tags: union(commonTags, { workload: 'secrets' })
   }

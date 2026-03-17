@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "17566764961485623924"
+      "templateHash": "15946613761752480429"
     }
   },
   "parameters": {
@@ -265,6 +265,13 @@
       "defaultValue": "",
       "metadata": {
         "description": "Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone)."
+      }
+    },
+    "existingKvDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the Key Vault PE skips DNS zone and VNet link creation to avoid conflicts."
       }
     },
     "colocateSql": {
@@ -1591,6 +1598,9 @@
           "vnetId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.vnetId.value]"
           },
+          "existingPrivateDnsZoneId": {
+            "value": "[parameters('existingKvDnsZoneId')]"
+          },
           "location": {
             "value": "[parameters('location')]"
           },
@@ -1605,7 +1615,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "15829233239122020575"
+              "templateHash": "1133838353233636274"
             }
           },
           "parameters": {
@@ -1645,13 +1655,23 @@
               "metadata": {
                 "description": "Tags"
               }
+            },
+            "existingPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone."
+              }
             }
           },
           "variables": {
-            "privateDnsZoneName": "privatelink.vaultcore.azure.net"
+            "privateDnsZoneName": "privatelink.vaultcore.azure.net",
+            "createDnsZone": "[empty(parameters('existingPrivateDnsZoneId'))]",
+            "effectiveDnsZoneId": "[if(variables('createDnsZone'), resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName')), parameters('existingPrivateDnsZoneId'))]"
           },
           "resources": [
             {
+              "condition": "[variables('createDnsZone')]",
               "type": "Microsoft.Network/privateDnsZones",
               "apiVersion": "2024-06-01",
               "name": "[variables('privateDnsZoneName')]",
@@ -1659,6 +1679,7 @@
               "tags": "[parameters('tags')]"
             },
             {
+              "condition": "[variables('createDnsZone')]",
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', variables('privateDnsZoneName'), format('{0}-vnet-link', parameters('keyVaultName')))]",
@@ -1706,7 +1727,7 @@
                   {
                     "name": "privatelink-vault",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+                      "privateDnsZoneId": "[variables('effectiveDnsZoneId')]"
                     }
                   }
                 ]
@@ -1724,7 +1745,7 @@
             },
             "dnsZoneId": {
               "type": "string",
-              "value": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+              "value": "[variables('effectiveDnsZoneId')]"
             }
           }
         }

@@ -253,6 +253,7 @@ The script will:
   - Auto-detect existing infrastructure and reuse the admin password from Key Vault
   - Auto-detect the AD domain name from DC01 (or accept `-DomainName` parameter)
   - Skip Key Vault RBAC prompts
+- **Auto-detect existing private DNS zones** (`privatelink.file`, `privatelink.vaultcore`) linked to the lab VNet — reuses them instead of creating duplicates (avoids conflicts when ArtifactsStorage or other add-on projects deployed first)
 - Prompt for Key Vault Administrator (user UPN or Entra ID group) — first deployment only
 - Compile and validate the Bicep template
 - Auto-generate a secure admin password (stored in Key Vault) — first deployment only
@@ -431,6 +432,9 @@ Azure-Lab/
 | `imageOffer` | string | `WindowsServer` | OS image offer |
 | `imageSku` | string | `2022-datacenter-g2` | OS image SKU |
 | `envTag` | string | `lab` | Environment tag value |
+| **Private DNS Zone Reuse** | | | |
+| `existingFileDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.file` DNS zone (auto-detected by `deploy.ps1`) |
+| `existingKvDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.vaultcore` DNS zone (auto-detected by `deploy.ps1`) |
 | **Entra ID Integration** | | | |
 | `enableEntraIntegration` | bool | `false` | Enable Entra ID hybrid identity features |
 | `entraIdDomain` | string | `''` | Entra ID verified domain (e.g., `contoso.com`) |

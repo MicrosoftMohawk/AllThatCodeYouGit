@@ -1,8 +1,8 @@
 // ============================================================================
 // Module: Key Vault Private Endpoint + Private DNS Zone
-// Deploys a Private Endpoint for the Key Vault "vault" sub-resource,
-// a Private DNS Zone (privatelink.vaultcore.azure.net), VNet link,
-// and DNS Zone Group for automatic A-record registration.
+// Deploys a Private Endpoint for the Key Vault "vault" sub-resource.
+// Optionally creates a Private DNS Zone (privatelink.vaultcore.azure.net)
+// and VNet link, or references an existing zone.
 // ============================================================================
 
 @description('Resource ID of the Key Vault')
@@ -23,20 +23,25 @@ param location string
 @description('Tags')
 param tags object = {}
 
+@description('Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone.')
+param existingPrivateDnsZoneId string = ''
+
 // Build the zone name dynamically for sovereign cloud compatibility
 var privateDnsZoneName = 'privatelink.vaultcore.azure.net'
+var createDnsZone = empty(existingPrivateDnsZoneId)
 
 // ---------------------------------------------------------------------------
 // Private DNS Zone: privatelink.vaultcore.azure.net
+// Created only when no existing zone is provided.
 // ---------------------------------------------------------------------------
-resource dnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+resource dnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (createDnsZone) {
   name: privateDnsZoneName
   location: 'global'
   tags: tags
 }
 
 // Link the DNS zone to the lab VNet so VPN clients & VMs can resolve
-resource dnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+resource dnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createDnsZone) {
   parent: dnsZone
   name: '${keyVaultName}-vnet-link'
   location: 'global'
@@ -48,6 +53,9 @@ resource dnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024
     registrationEnabled: false
   }
 }
+
+// Resolve the effective DNS zone ID — either the newly created zone or the existing one
+var effectiveDnsZoneId = createDnsZone ? dnsZone.id : existingPrivateDnsZoneId
 
 // ---------------------------------------------------------------------------
 // Private Endpoint — targets Key Vault "vault" sub-resource
@@ -83,7 +91,7 @@ resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2
       {
         name: 'privatelink-vault'
         properties: {
-          privateDnsZoneId: dnsZone.id
+          privateDnsZoneId: effectiveDnsZoneId
         }
       }
     ]
@@ -94,4 +102,4 @@ resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2
 // Outputs
 // ---------------------------------------------------------------------------
 output privateEndpointId string = pe.id
-output dnsZoneId string = dnsZone.id
+output dnsZoneId string = effectiveDnsZoneId

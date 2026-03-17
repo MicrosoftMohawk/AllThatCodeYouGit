@@ -1116,19 +1116,69 @@ $vmNameParams = @(
 $colocateParam = if ($ColocateSqlBool) { 'colocateSql=true' } else { 'colocateSql=false' }
 $joinDomainParam = if ($JoinDomainBool) { 'joinDomain=true' } else { 'joinDomain=false' }
 
-# --- Detect existing privatelink.file DNS zone --------------------------------
-# If ArtifactsStorage (or another project) already created a
-# privatelink.file.core.windows.net zone linked to the lab VNet, pass its
-# resource ID so the File Share Witness PE reuses it instead of creating a
-# conflicting duplicate.
+# --- Detect existing private DNS zones -----------------------------------------
+# If ArtifactsStorage (or another project) already created a privatelink DNS
+# zone linked to the lab VNet, pass its resource ID so the Bicep modules reuse
+# it instead of creating a conflicting duplicate (Azure blocks duplicate VNet
+# links to different zones of the same name).
+#
+# Detection logic:
+#   1. List all zones of the given name across the subscription
+#   2. For each zone, check if it has a VNet link to the lab VNet
+#   3. Use the first zone that has such a link
+#   4. If no linked zone exists, let the Bicep template create one
+# ---------------------------------------------------------------------------
+$labVnetName = "$BaseName-vnet"
+$labNetworkRg = "$BaseName-rg-network"
+$labVnetId = az network vnet show -g $labNetworkRg -n $labVnetName --query id -o tsv 2>&1
+if ($LASTEXITCODE -ne 0) { $labVnetId = '' } else { $labVnetId = $labVnetId.Trim() }
+
+function Find-LinkedPrivateDnsZone {
+    param([string]$ZoneName, [string]$VNetId)
+    if ([string]::IsNullOrWhiteSpace($VNetId)) { return '' }
+
+    # Get all zones with this name (returns resource ID + resource group)
+    $zonesJson = az network private-dns zone list `
+        --query "[?name=='$ZoneName'].{id:id, rg:resourceGroup}" -o json 2>&1
+    if ($LASTEXITCODE -ne 0) { return '' }
+    $zones = $null
+    try { $zones = $zonesJson | ConvertFrom-Json } catch { return '' }
+    if (-not $zones -or $zones.Count -eq 0) { return '' }
+
+    foreach ($zone in $zones) {
+        # Check if this zone has a VNet link pointing to the lab VNet
+        $linksJson = az network private-dns link vnet list `
+            --zone-name $ZoneName --resource-group $zone.rg `
+            --query "[?virtualNetwork.id=='$VNetId'].id" -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($linksJson)) {
+            return $zone.id.Trim()
+        }
+    }
+    return ''
+}
+
+# -- privatelink.file.core.windows.net (File Share Witness PE) --
 $existingFileDnsZoneId = ''
-Write-Step "Checking for existing privatelink.file.core.windows.net DNS zone..."
-$fileDnsZones = az network private-dns zone list --query "[?name=='privatelink.file.core.windows.net'].id" -o tsv 2>&1
-if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($fileDnsZones)) {
-    $existingFileDnsZoneId = ($fileDnsZones -split "`n" | Select-Object -First 1).Trim()
-    Write-Ok "Found existing zone: $existingFileDnsZoneId"
+Write-Step "Checking for existing privatelink.file.core.windows.net DNS zone linked to $labVnetName..."
+if (-not [string]::IsNullOrWhiteSpace($labVnetId)) {
+    $existingFileDnsZoneId = Find-LinkedPrivateDnsZone -ZoneName 'privatelink.file.core.windows.net' -VNetId $labVnetId
+}
+if (-not [string]::IsNullOrWhiteSpace($existingFileDnsZoneId)) {
+    Write-Ok "Found linked zone: $existingFileDnsZoneId"
 } else {
-    Write-Ok "No existing zone — will create new"
+    Write-Ok "No linked zone found — Bicep will create one"
+}
+
+# -- privatelink.vaultcore.azure.net (Key Vault PE) --
+$existingKvDnsZoneId = ''
+Write-Step "Checking for existing privatelink.vaultcore.azure.net DNS zone linked to $labVnetName..."
+if (-not [string]::IsNullOrWhiteSpace($labVnetId)) {
+    $existingKvDnsZoneId = Find-LinkedPrivateDnsZone -ZoneName 'privatelink.vaultcore.azure.net' -VNetId $labVnetId
+}
+if (-not [string]::IsNullOrWhiteSpace($existingKvDnsZoneId)) {
+    Write-Ok "Found linked zone: $existingKvDnsZoneId"
+} else {
+    Write-Ok "No linked zone found — Bicep will create one"
 }
 
 # Build the complete --parameters array (each key=value as a separate element
@@ -1151,6 +1201,7 @@ $deployParams = @(
     "entraConnectPlacement=$EntraConnectPlacement"
     "osDiskSku=$OsDiskSku"
     "existingFileDnsZoneId=$existingFileDnsZoneId"
+    "existingKvDnsZoneId=$existingKvDnsZoneId"
     $colocateParam
     $joinDomainParam
 ) + $vmNameParams
@@ -1168,6 +1219,8 @@ if ($EnableEntraBool) {
     Write-Host "  Entra Connect   : $EntraConnectPlacement" -ForegroundColor White
 }
 Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
+Write-Host "  DNS Zone (file) : $(if ($existingFileDnsZoneId) {"Reusing: $existingFileDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
+Write-Host "  DNS Zone (vault): $(if ($existingKvDnsZoneId) {"Reusing: $existingKvDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White
 Write-Host "  Admin Password  : $(if ($IsIncremental) {'(reused from Key Vault)'} else {'(auto-generated, stored in Key Vault)'})" -ForegroundColor White
 Write-Host "  Template        : $templateFile" -ForegroundColor White

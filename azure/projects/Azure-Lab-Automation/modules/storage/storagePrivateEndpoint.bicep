@@ -1,15 +1,15 @@
 // ============================================================================
-// Module: Key Vault Private Endpoint + Private DNS Zone
-// Deploys a Private Endpoint for the Key Vault "vault" sub-resource,
-// a Private DNS Zone (privatelink.vaultcore.azure.net), VNet link,
-// and DNS Zone Group for automatic A-record registration.
+// Module: Storage Account Private Endpoint + Private DNS Zone (Azure Files)
+// Deploys a Private Endpoint for the storage account's "file" sub-resource.
+// Optionally creates a Private DNS Zone (privatelink.file.<storage-suffix>)
+// and VNet link, or references an existing zone (e.g., from ArtifactsStorage).
 // ============================================================================
 
-@description('Resource ID of the Key Vault')
-param keyVaultId string
+@description('Resource ID of the storage account')
+param storageAccountId string
 
-@description('Name of the Key Vault (used for PE naming)')
-param keyVaultName string
+@description('Name of the storage account (used for PE naming)')
+param storageAccountName string
 
 @description('Subnet resource ID for the private endpoint')
 param subnetId string
@@ -23,22 +23,27 @@ param location string
 @description('Tags')
 param tags object = {}
 
-// Build the zone name dynamically for sovereign cloud compatibility
-var privateDnsZoneName = 'privatelink.vaultcore.azure.net'
+@description('Resource ID of an existing privatelink.file DNS zone. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone.')
+param existingPrivateDnsZoneId string = ''
+
+// Build the zone name dynamically so it works in sovereign clouds
+var privateDnsZoneName = 'privatelink.file.${environment().suffixes.storage}'
+var createDnsZone = empty(existingPrivateDnsZoneId)
 
 // ---------------------------------------------------------------------------
-// Private DNS Zone: privatelink.vaultcore.azure.net
+// Private DNS Zone: privatelink.file.<storage-suffix>
+// Created only when no existing zone is provided.
 // ---------------------------------------------------------------------------
-resource dnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+resource dnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (createDnsZone) {
   name: privateDnsZoneName
   location: 'global'
   tags: tags
 }
 
 // Link the DNS zone to the lab VNet so VPN clients & VMs can resolve
-resource dnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+resource dnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createDnsZone) {
   parent: dnsZone
-  name: '${keyVaultName}-vnet-link'
+  name: '${storageAccountName}-vnet-link'
   location: 'global'
   tags: tags
   properties: {
@@ -49,11 +54,14 @@ resource dnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024
   }
 }
 
+// Resolve the effective DNS zone ID — either the newly created zone or the existing one
+var effectiveDnsZoneId = createDnsZone ? dnsZone.id : existingPrivateDnsZoneId
+
 // ---------------------------------------------------------------------------
-// Private Endpoint — targets Key Vault "vault" sub-resource
+// Private Endpoint — targets storage account "file" sub-resource
 // ---------------------------------------------------------------------------
 resource pe 'Microsoft.Network/privateEndpoints@2023-11-01' = {
-  name: '${keyVaultName}-pe-vault'
+  name: '${storageAccountName}-pe-file'
   location: location
   tags: tags
   properties: {
@@ -62,11 +70,11 @@ resource pe 'Microsoft.Network/privateEndpoints@2023-11-01' = {
     }
     privateLinkServiceConnections: [
       {
-        name: '${keyVaultName}-plsc-vault'
+        name: '${storageAccountName}-plsc-file'
         properties: {
-          privateLinkServiceId: keyVaultId
+          privateLinkServiceId: storageAccountId
           groupIds: [
-            'vault'
+            'file'
           ]
         }
       }
@@ -81,9 +89,9 @@ resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2
   properties: {
     privateDnsZoneConfigs: [
       {
-        name: 'privatelink-vault'
+        name: 'privatelink-file'
         properties: {
-          privateDnsZoneId: dnsZone.id
+          privateDnsZoneId: effectiveDnsZoneId
         }
       }
     ]
@@ -94,4 +102,4 @@ resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2
 // Outputs
 // ---------------------------------------------------------------------------
 output privateEndpointId string = pe.id
-output dnsZoneId string = dnsZone.id
+output dnsZoneId string = effectiveDnsZoneId

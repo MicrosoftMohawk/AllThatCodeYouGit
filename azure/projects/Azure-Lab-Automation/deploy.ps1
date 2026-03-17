@@ -8,7 +8,7 @@
     login session, and executes the Bicep deployment at the subscription scope.
 
     The deployment is tiered:
-      Tier 1: Core networking, AD Domain Controllers, Azure Bastion, Cloud Witness
+      Tier 1: Core networking, AD Domain Controllers, Azure Bastion, File Share Witness
       Tier 2: + SQL Server VMs (5 total, including AOAG pair at Site 2 with ILB)
       Tier 3: + Application VMs (CAS + 3 child primaries)
 
@@ -1015,10 +1015,65 @@ $rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICA
 Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
 Write-Ok "Root cert exported: $RootCertPath"
 
-# Export client cert as PFX (TripleDES_SHA1 for cross-OS compatibility)
+# Export client cert as PFX (TripleDES_SHA1 for cross-OS compatibility).
+# If the existing cert's private key is non-exportable (created by an older
+# version of the script or imported without the exportable flag), delete it
+# and recreate with -KeyExportPolicy Exportable so re-export always works.
+# If the root cert also lacks a usable private key (imported from .cer or
+# corrupted), both certs are recreated from scratch.
 $pfxPwd = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
-Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
-    -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+try {
+    Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
+        -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+} catch {
+    if ($_.Exception.Message -match 'non-exportable|private key') {
+        Write-Host "   Existing client cert has a non-exportable private key. Recreating..." -ForegroundColor Yellow
+        $clientCert | Remove-Item -Force
+
+        # Check if the root cert has an accessible private key for signing.
+        # If not, recreate it too (the VPN Gateway validates the root public
+        # key which gets re-exported to .cer and passed as vpnRootCertData).
+        if (-not $rootCert.HasPrivateKey) {
+            Write-Host "   Root cert also lacks a private key. Recreating both certs..." -ForegroundColor Yellow
+            $rootCert | Remove-Item -Force
+            $rootCert = New-SelfSignedCertificate `
+                -Type Custom `
+                -Subject $rootCertSubject `
+                -KeySpec Signature `
+                -KeyExportPolicy Exportable `
+                -KeyLength 2048 `
+                -HashAlgorithm sha256 `
+                -KeyUsageProperty Sign `
+                -KeyUsage CertSign `
+                -CertStoreLocation 'Cert:\CurrentUser\My' `
+                -NotAfter (Get-Date).AddYears(3)
+            Write-Ok "Root CA recreated: $($rootCert.Subject) (Thumbprint: $($rootCert.Thumbprint))"
+
+            # Re-export root cert public key with the new cert
+            $rootDer = $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+            $rootCertBase64 = [Convert]::ToBase64String($rootDer)
+            $rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICATE-----"
+            Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
+            Write-Ok "Root cert re-exported: $RootCertPath"
+        }
+
+        $clientCert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject $clientCertSubject `
+            -KeySpec Signature `
+            -KeyExportPolicy Exportable `
+            -KeyLength 2048 `
+            -HashAlgorithm sha256 `
+            -Signer $rootCert `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -NotAfter (Get-Date).AddYears(3)
+        Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
+            -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+        Write-Ok "Client cert recreated with exportable key: $($clientCert.Subject) (Thumbprint: $($clientCert.Thumbprint))"
+    } else {
+        throw
+    }
+}
 Write-Ok "Client PFX exported: $ClientPfxPath (password = admin password in Key Vault)"
 
 # --- Step 3: Ensure root cert is in Trusted Root CAs ------------------------
@@ -1041,7 +1096,7 @@ $VpnRootCertData = $rootCertBase64
 # 4. Deploy
 # =============================================================================
 $tierDescription = switch ($DeploymentTier) {
-    1 { "Tier 1: Core Networking + AD (DCs, Bastion, Cloud Witness)" }
+    1 { "Tier 1: Core Networking + AD (DCs, Bastion, File Share Witness)" }
     2 { "Tier 2: + SQL Server VMs$(if($ColocateSqlBool){' (AOAG only — SQL colocated on MCM)'} else {' (5 VMs including AOAG at Site 2)'})" }
     3 { "Tier 3: Full Lab (Core + SQL + MCM servers)" }
 }
@@ -1060,6 +1115,21 @@ $vmNameParams = @(
 )
 $colocateParam = if ($ColocateSqlBool) { 'colocateSql=true' } else { 'colocateSql=false' }
 $joinDomainParam = if ($JoinDomainBool) { 'joinDomain=true' } else { 'joinDomain=false' }
+
+# --- Detect existing privatelink.file DNS zone --------------------------------
+# If ArtifactsStorage (or another project) already created a
+# privatelink.file.core.windows.net zone linked to the lab VNet, pass its
+# resource ID so the File Share Witness PE reuses it instead of creating a
+# conflicting duplicate.
+$existingFileDnsZoneId = ''
+Write-Step "Checking for existing privatelink.file.core.windows.net DNS zone..."
+$fileDnsZones = az network private-dns zone list --query "[?name=='privatelink.file.core.windows.net'].id" -o tsv 2>&1
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($fileDnsZones)) {
+    $existingFileDnsZoneId = ($fileDnsZones -split "`n" | Select-Object -First 1).Trim()
+    Write-Ok "Found existing zone: $existingFileDnsZoneId"
+} else {
+    Write-Ok "No existing zone — will create new"
+}
 
 # Build the complete --parameters array (each key=value as a separate element
 # so PowerShell passes them as individual arguments to az CLI).
@@ -1080,6 +1150,7 @@ $deployParams = @(
     "domainStrategy=$DomainStrategy"
     "entraConnectPlacement=$EntraConnectPlacement"
     "osDiskSku=$OsDiskSku"
+    "existingFileDnsZoneId=$existingFileDnsZoneId"
     $colocateParam
     $joinDomainParam
 ) + $vmNameParams
@@ -1212,6 +1283,239 @@ if ($VmTimeZone -ne 'UTC') {
 }
 
 # =============================================================================
+# 5a1. Post-Deployment: Register File Share Witness Storage Account in AD
+# =============================================================================
+# The witness storage account is deployed in Tier 1 with shared keys disabled
+# and a private endpoint.  Before the WSFC cluster (Tier 2) can use it as a
+# File Share Witness, the storage account must be registered as a computer
+# object in AD for Kerberos SMB authentication.
+#
+# This section automates the full registration workflow:
+#   1. Discover the witness storage account by tag
+#   2. Temporarily enable shared key access
+#   3. Generate and retrieve the kerb1 Kerberos key
+#   4. Run Register-StorageInAD.ps1 on DC01 via RunCommand
+#   5. Configure the storage account with AD DS identity
+#   6. Flush KDC cache on DC02
+#   7. Verify Kerberos SMB mount from a domain-joined VM
+#   8. Re-disable shared key access
+# =============================================================================
+if ($DeploymentTier -ge 2 -and $JoinDomainBool) {
+    Write-Header "Registering File Share Witness Storage Account in AD"
+
+    $rgIdentity = "$BaseName-rg-identity"
+    $dcVmName   = "$BaseName-dc01"
+    $dc02VmName = "$BaseName-dc02"
+
+    # --- 1. Discover the witness storage account by tag ---
+    Write-Step "Discovering witness storage account..."
+    $witnessStgName = az storage account list `
+        --resource-group $rgIdentity `
+        --query "[?tags.workload=='file-share-witness'].name | [0]" -o tsv 2>&1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($witnessStgName)) {
+        Write-Fail "Could not find witness storage account in $rgIdentity."
+        Write-Host "   Skipping AD registration. Register manually later — see README section 6a." -ForegroundColor Yellow
+    } else {
+        $witnessStgName = $witnessStgName.Trim()
+        Write-Ok "Witness storage account: $witnessStgName"
+
+        # Check if already registered in AD (skip if so)
+        $addsEnabled = az storage account show `
+            --name $witnessStgName -g $rgIdentity `
+            --query "azureFilesIdentityBasedAuthentication.directoryServiceOptions" -o tsv 2>&1
+        if ($addsEnabled -eq 'AADDS' -or $addsEnabled -eq 'AD') {
+            Write-Ok "Storage account already registered for AD DS authentication — skipping"
+        } else {
+            # --- 2. Temporarily enable shared key access ---
+            Write-Step "Temporarily enabling shared key access..."
+            az storage account update `
+                --name $witnessStgName -g $rgIdentity `
+                --allow-shared-key-access true -o none 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "Failed to enable shared key access. Skipping AD registration."
+            } else {
+                Write-Ok "Shared key access enabled"
+
+                # --- 3. Generate and retrieve Kerberos key ---
+                Write-Step "Generating Kerberos key (kerb1)..."
+                az storage account keys renew `
+                    --account-name $witnessStgName -g $rgIdentity `
+                    --key key1 --key-type kerb -o none 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Fail "Failed to generate Kerberos key."
+                } else {
+                    $witnessKerbKey = az storage account keys list `
+                        --account-name $witnessStgName -g $rgIdentity `
+                        --expand-key-type kerb `
+                        --query "[?keyName=='kerb1'].value" -o tsv 2>&1
+                    $witnessKerbKey = ("$witnessKerbKey").Trim()
+
+                    if ([string]::IsNullOrWhiteSpace($witnessKerbKey)) {
+                        Write-Fail "Failed to retrieve Kerberos key."
+                    } else {
+                        Write-Ok "Kerberos key generated"
+
+                        # --- 4. Run Register-StorageInAD.ps1 on DC01 ---
+                        Write-Step "Registering storage account in AD (running on DC01)..."
+
+                        $adScriptPath = Join-Path $ScriptRoot 'modules' 'identity' 'scripts' 'Register-StorageInAD.ps1'
+                        $adScriptContent = Get-Content $adScriptPath -Raw
+                        # Strip comment block and param() block (az vm run-command doesn't bind params)
+                        $adScriptContent = $adScriptContent -replace '(?s)<#.*?#>\s*', ''
+                        $adScriptContent = $adScriptContent -replace '(?sm)param\s*\(.*?^\)\s*', ''
+
+                        # Prepend variable assignments
+                        $domainDNParts = ($DomainName -split '\.' | ForEach-Object { "DC=$_" }) -join ','
+                        $witnessOUPath = "OU=Storage Accounts,OU=Lab Servers,$domainDNParts"
+                        $witnessPreamble = @"
+`$StorageAccountName = '$($witnessStgName -replace "'","''")'
+`$StorageKerbKey = '$($witnessKerbKey -replace "'","''")'
+`$DomainName = '$($DomainName -replace "'","''")'
+`$OUPath = '$($witnessOUPath -replace "'","''")'
+
+"@
+                        $adScriptContent = $witnessPreamble + $adScriptContent
+
+                        $witnessTempScript = Join-Path ([System.IO.Path]::GetTempPath()) `
+                            "Register-WitnessInAD-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+                        $adScriptContent | Set-Content -Path $witnessTempScript -Encoding UTF8 -NoNewline
+
+                        $witnessResultRaw = az vm run-command invoke `
+                            --resource-group $rgIdentity `
+                            --name $dcVmName `
+                            --command-id RunPowerShellScript `
+                            --scripts "@$witnessTempScript" `
+                            -o json 2>&1
+
+                        Remove-Item $witnessTempScript -Force -ErrorAction SilentlyContinue
+
+                        # Parse the JSON response
+                        $witnessResultText = ($witnessResultRaw | ForEach-Object { "$_" }) -join "`n"
+                        try {
+                            $witnessResultJson = $witnessResultText | ConvertFrom-Json
+                            $witnessStdout = $witnessResultJson.value | Where-Object { $_.code -match 'StdOut' } | Select-Object -ExpandProperty message
+                            $witnessStderr = $witnessResultJson.value | Where-Object { $_.code -match 'StdErr' } | Select-Object -ExpandProperty message
+                        } catch {
+                            $witnessStdout = $witnessResultText
+                            $witnessStderr = ''
+                        }
+
+                        $witnessJsonMatch = [regex]::Match($witnessStdout, 'AD_REGISTRATION_RESULT=(.+)')
+                        if (-not $witnessJsonMatch.Success) {
+                            Write-Fail "AD registration failed on DC01."
+                            if ($witnessStdout) { ($witnessStdout -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray } }
+                            if ($witnessStderr) { ($witnessStderr -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Red } }
+                        } else {
+                            try {
+                                $witnessAdInfo = $witnessJsonMatch.Groups[1].Value | ConvertFrom-Json
+                            } catch {
+                                Write-Fail "Failed to parse AD registration JSON."
+                                $witnessAdInfo = $null
+                            }
+
+                            if ($witnessAdInfo) {
+                                Write-Ok "Computer account: $($witnessAdInfo.computerName)"
+                                Write-Ok "SPN: $($witnessAdInfo.spn)"
+
+                                # --- 5. Configure storage account with AD DS identity ---
+                                Write-Step "Configuring storage account for AD DS authentication..."
+                                az storage account update `
+                                    --name $witnessStgName -g $rgIdentity `
+                                    --enable-files-adds true `
+                                    --domain-name $DomainName `
+                                    --net-bios-domain-name $witnessAdInfo.netBiosDomainName `
+                                    --forest-name $witnessAdInfo.forestName `
+                                    --domain-guid $witnessAdInfo.domainGuid `
+                                    --domain-sid $witnessAdInfo.domainSid `
+                                    --azure-storage-sid $witnessAdInfo.azureStorageSid `
+                                    --sam-account-name $witnessAdInfo.computerName `
+                                    --account-type Computer `
+                                    --default-share-permission StorageFileDataSmbShareContributor `
+                                    -o none 2>&1
+
+                                if ($LASTEXITCODE -ne 0) {
+                                    Write-Fail "Failed to configure AD DS authentication on storage account."
+                                } else {
+                                    Write-Ok "AD DS authentication enabled on witness storage account"
+
+                                    # --- 6. Flush KDC cache on DC02 ---
+                                    Write-Step "Flushing KDC cache on DC02..."
+                                    az vm run-command invoke `
+                                        --resource-group $rgIdentity `
+                                        --name $dc02VmName `
+                                        --command-id RunPowerShellScript `
+                                        --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
+                                        --query "value[0].message" -o tsv 2>&1 | Out-Null
+                                    if ($LASTEXITCODE -eq 0) {
+                                        Write-Ok "DC02 KDC cache flushed"
+                                    } else {
+                                        Write-Host "   Warning: could not restart KDC on DC02." -ForegroundColor Yellow
+                                    }
+
+                                    # --- 7. Verify Kerberos SMB mount ---
+                                    $testRg = "$BaseName-rg-site2"
+                                    $testVm = $VmNames.SqlAoag1
+                                    Write-Step "Verifying Kerberos SMB mount from $testVm..."
+                                    $testVmState = az vm get-instance-view -g $testRg -n $testVm `
+                                        --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]" `
+                                        -o tsv 2>&1
+                                    if ($LASTEXITCODE -ne 0 -or $testVmState -notmatch 'running') {
+                                        Write-Host "   VM '$testVm' not available (state: $testVmState). Skipping verification." -ForegroundColor Yellow
+                                        Write-Host "   Verify manually: net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Yellow
+                                    } else {
+                                        $kerbTestScript = @"
+klist purge 2>&1 | Out-Null
+net use * /delete /y 2>&1 | Out-Null
+Start-Sleep -Seconds 2
+`$r = net use Z: "\\$witnessStgName.file.core.windows.net\witness" 2>&1
+Write-Host "MOUNT_EXIT=`$LASTEXITCODE"
+`$r | ForEach-Object { Write-Host `$_ }
+net use Z: /delete 2>&1 | Out-Null
+"@
+                                        $kerbTestFile = Join-Path ([System.IO.Path]::GetTempPath()) `
+                                            "Verify-WitnessMount-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+                                        $kerbTestScript | Set-Content -Path $kerbTestFile -Encoding UTF8 -NoNewline
+
+                                        $verifyResult = az vm run-command invoke `
+                                            -g $testRg -n $testVm `
+                                            --command-id RunPowerShellScript `
+                                            --scripts "@$kerbTestFile" `
+                                            --query "value[0].message" -o tsv 2>&1
+
+                                        Remove-Item $kerbTestFile -Force -ErrorAction SilentlyContinue
+
+                                        if ($verifyResult -match 'MOUNT_EXIT=0') {
+                                            Write-Ok "Kerberos SMB mount verified — File Share Witness is ready"
+                                        } else {
+                                            Write-Fail "Mount verification failed."
+                                            $verifyResult -split "`n" | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray }
+                                            Write-Host "   This may resolve after AD replication completes. Verify manually:" -ForegroundColor Yellow
+                                            Write-Host "   net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Yellow
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                # --- 8. Re-disable shared key access ---
+                Write-Step "Re-disabling shared key data-plane access..."
+                az storage account update `
+                    --name $witnessStgName -g $rgIdentity `
+                    --allow-shared-key-access false -o none 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "   Warning: failed to re-disable shared key access. Disable manually:" -ForegroundColor Yellow
+                    Write-Host "   az storage account update --name $witnessStgName -g $rgIdentity --allow-shared-key-access false" -ForegroundColor Gray
+                } else {
+                    Write-Ok "Shared key data-plane access re-disabled"
+                }
+            }
+        }
+    }
+}
+
+# =============================================================================
 # 5b. Post-Deployment: Add GRP-MCMAdmins to Local Administrators on MCM VMs
 # =============================================================================
 # After domain join, add the domain group GRP-MCMAdmins to the Local
@@ -1259,7 +1563,7 @@ Write-Header "Deployment Complete!"
 Write-Host ""
 Write-Host "  Resource Groups created:" -ForegroundColor White
 Write-Host "    - $BaseName-rg-network    (VNet, NSGs, Bastion, VPN Gateway)" -ForegroundColor Gray
-Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault, Cloud Witness)" -ForegroundColor Gray
+Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault, File Share Witness)" -ForegroundColor Gray
 if ($DeploymentTier -ge 2) {
     $mainContents = @()
     if (-not $ColocateSqlBool) { $mainContents += "$($VmNames.SqlCas)", "$($VmNames.SqlPrimA)" }
@@ -1379,7 +1683,7 @@ if ($DeploymentTier -ge 2) {
         Write-Host "  6) Install SQL Server on: $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB)" -ForegroundColor White
     }
     Write-Host "  7) Install SQL Server on AOAG nodes: $($VmNames.SqlAoag1), $($VmNames.SqlAoag2)" -ForegroundColor White
-    Write-Host "  8) Configure WSFC with Cloud Witness, create AOAG on Site 2 SQL nodes" -ForegroundColor White
+    Write-Host "  8) File Share Witness registered in AD (automated). Configure WSFC quorum + create AOAG on Site 2 SQL nodes" -ForegroundColor White
     Write-Host "  9) Create AG Listener using ILB IP 10.0.40.10 (probe port 59999)" -ForegroundColor White
 }
 if ($DeploymentTier -ge 3) {

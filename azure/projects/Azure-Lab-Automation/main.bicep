@@ -139,6 +139,11 @@ param entraConnectIp string = '10.0.1.6'
 @description('AOAG Listener IP (ILB frontend) in Site 2 subnet')
 param aoagListenerIp string = '10.0.40.10'
 
+// --- Private DNS Zone Reuse --------------------------------------------------
+
+@description('Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone).')
+param existingFileDnsZoneId string = ''
+
 // --- OS Image ----------------------------------------------------------------
 
 // --- Colocated SQL+MCM option -------------------------------------------------
@@ -373,7 +378,9 @@ module keyVaultPe 'modules/security/keyVaultPrivateEndpoint.bicep' = {
   }
 }
 
-// --- Cloud Witness Storage Account -------------------------------------------
+// --- File Share Witness Storage Account (WSFC Quorum) ------------------------
+// Deploys a locked-down Azure Files share for WSFC File Share Witness.
+// AD DS registration is a post-deployment step — see README Section 6.
 
 module cloudWitness 'modules/storage/storageAccount.bicep' = {
   name: 'deploy-cloud-witness'
@@ -382,7 +389,23 @@ module cloudWitness 'modules/storage/storageAccount.bicep' = {
     namePrefix: 'stgcw'
     location: location
     skuName: 'Standard_LRS'
-    tags: union(commonTags, { workload: 'cloud-witness' })
+    shareName: 'witness'
+    shareQuotaGiB: 5
+    tags: union(commonTags, { workload: 'file-share-witness' })
+  }
+}
+
+module cloudWitnessPe 'modules/storage/storagePrivateEndpoint.bicep' = {
+  name: 'deploy-cloud-witness-pe'
+  scope: rgNet
+  params: {
+    storageAccountId: cloudWitness.outputs.storageAccountId
+    storageAccountName: cloudWitness.outputs.storageAccountName
+    subnetId: vnet.outputs.snetPeId
+    vnetId: vnet.outputs.vnetId
+    existingPrivateDnsZoneId: existingFileDnsZoneId
+    location: location
+    tags: union(commonTags, { workload: 'file-share-witness' })
   }
 }
 
@@ -929,6 +952,7 @@ output resourceGroups object = {
 output vnetId string = vnet.outputs.vnetId
 output bastionName string = bastion.outputs.bastionName
 output cloudWitnessStorageAccount string = cloudWitness.outputs.storageAccountName
+output cloudWitnessFileShareName string = cloudWitness.outputs.fileShareName
 output keyVaultName string = keyVault.outputs.keyVaultName
 output keyVaultSecretName string = keyVault.outputs.secretName
 

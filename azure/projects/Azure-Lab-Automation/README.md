@@ -41,7 +41,7 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 │  │ snet-site2 (10.0.40.0/24)  — Remote Site 2 (AOAG)                  ││
 │  │   PrimaryC        SQL-PrimC01 ──┐                                   ││
 │  │                   SQL-PrimC02 ──┤ AOAG + ILB Listener (10.0.40.10) ││
-│  │                                 │ Cloud Witness (Storage Acct)      ││
+│  │                                 │ File Share Witness (Azure Files)  ││
 │  └──────────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -167,8 +167,8 @@ The deployment uses a **tiered** approach so you can deploy incrementally:
 
 | Tier | What Gets Deployed | Use Case |
 |------|-------------------|----------|
-| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), Cloud Witness Storage, Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
-| **2** | + SQL VMs (with data disks), Availability Set, Internal Load Balancer. Standalone SQL VMs are skipped when `colocateSql` is true — only AOAG nodes are deployed. **Auto domain-join** SQL VMs (unless `joinDomain=false`). | Add SQL infrastructure |
+| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), File Share Witness Storage (Azure Files + PE — no public access, shared keys disabled), Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
+| **2** | + SQL VMs (with data disks), Availability Set, Internal Load Balancer. Standalone SQL VMs are skipped when `colocateSql` is true — only AOAG nodes are deployed. **Auto domain-join** SQL VMs (unless `joinDomain=false`). **Auto-registers File Share Witness storage account in AD** for Kerberos SMB (WSFC quorum). | Add SQL infrastructure |
 | **3** | + MCM Application VMs (CAS + 3 child primaries). When `colocateSql` is true, MCM VMs are upsized and get data disks for SQL. **Auto domain-join** MCM VMs (unless `joinDomain=false`). | Full lab deployment |
 
 Each tier is **cumulative** — Tier 3 includes everything from Tiers 1 and 2.
@@ -318,6 +318,7 @@ Azure-Lab/
 ├── README.md                              # This file
 ├── deploy.ps1                             # PowerShell wrapper (prereqs, incremental detection, naming, deploy)
 ├── deploy-mgmt.ps1                        # Standalone: deploy management VM (Entra ID joined)
+├── Register-WitnessStorage.ps1            # Standalone: register witness storage account in AD
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
 ├── Set-VpnDnsConfig.ps1                   # Helper: configure DNS NRPT rules for VPN private endpoint access
 ├── main.bicep                             # Subscription-scoped orchestrator (AD lab infrastructure)
@@ -340,7 +341,8 @@ Azure-Lab/
     │   ├── availabilitySet.bicep           # Availability Set for AOAG SQL nodes
     │   └── loadBalancer.bicep              # Internal Load Balancer for AOAG listener
     ├── storage/
-    │   └── storageAccount.bicep           # Cloud Witness storage account
+    │   ├── storageAccount.bicep           # File Share Witness storage account (Azure Files + AD DS auth)
+    │   └── storagePrivateEndpoint.bicep   # Storage PE + private DNS zone (privatelink.file)
     ├── security/
     │   ├── keyVault.bicep                 # Key Vault (password storage + RBAC assignment)
     │   └── keyVaultPrivateEndpoint.bicep   # Key Vault PE + private DNS zone
@@ -356,7 +358,8 @@ Azure-Lab/
         └── scripts/
             ├── Configure-AD.ps1           # AD configuration script (loaded inline)
             ├── Install-EntraConnect.ps1   # Download + silent install Entra Connect
-            └── Install-ManagementTools.ps1 # RSAT, Az module, SqlServer, Azure CLI
+            ├── Install-ManagementTools.ps1 # RSAT, Az module, SqlServer, Azure CLI
+            └── Register-StorageInAD.ps1   # Register storage account in AD for Kerberos SMB
 ```
 
 ---
@@ -521,7 +524,7 @@ AD DS is automatically configured during Tier 1 deployment:
 - **DC01** promoted as the first domain controller in a new forest
 - **DC02** promoted as a replica domain controller
 - **VNet DNS** set to DC IPs (10.0.1.4, 10.0.1.5) at deployment time
-- **OUs**: Lab Accounts > Service Accounts, Lab Accounts > Admins, Lab Groups, Lab Servers > SQL Servers + App Servers
+- **OUs**: Lab Accounts > Service Accounts, Lab Accounts > Admins, Lab Groups, Lab Servers > SQL Servers + App Servers + Storage Accounts
 - **Security Groups**: GRP-DomainAdmins-Lab, GRP-SQLAdmins, GRP-AppAdmins, GRP-ServerAdmins, GRP-DomainJoin
 - **Service Accounts** (OU=Service Accounts): svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa
 - **Admin Accounts** (OU=Admins): lab-admin (delegated OU admin, member of GRP-ServerAdmins + GRP-SQLAdmins + GRP-AppAdmins + GRP-MCMAdmins), mcm-admin, sql-admin
@@ -680,13 +683,50 @@ Available presets:
 3. Format and mount data disks before SQL installation
 
 ### 6. WSFC + AOAG Configuration (Site 2)
+
+#### 6a. Register File Share Witness Storage Account in AD (Automated)
+
+The File Share Witness storage account is deployed during Tier 1 with shared keys disabled and a private endpoint. Before the cluster can use it as a WSFC quorum witness, the storage account must be registered as a computer object in AD for Kerberos SMB authentication.
+
+**This step is automated by `deploy.ps1`** — when deploying Tier 2 or higher with domain join enabled, the script automatically:
+
+1. Discovers the witness storage account by tag (`workload=file-share-witness`) in `{base}-rg-identity`
+2. Temporarily enables shared key access (required to generate the Kerberos key)
+3. Generates and retrieves the `kerb1` Kerberos key
+4. Runs `Register-StorageInAD.ps1` on DC01 via RunCommand — creates a computer account in AD, sets the AES-256 Kerberos key with the correct salt, and registers the `cifs` SPN
+5. Configures the storage account with AD DS identity (domain GUID, SID, forest name)
+6. Flushes the KDC cache on DC02 (DC01's KDC is restarted by the script)
+7. Verifies the Kerberos SMB mount from a domain-joined AOAG SQL node
+8. Re-disables shared key data-plane access
+
+If the storage account is already registered (re-running an incremental deploy), the step is skipped automatically.
+
+> **Manual fallback:** If the automated registration fails (e.g., DC01 not reachable), the script logs a warning and continues. You can re-run the deployment — the registration will be retried. To troubleshoot, check the RunCommand output in the Azure Portal for DC01.
+
+**Standalone execution** (already-deployed lab):
+```powershell
+# Register witness storage in AD (no full redeploy needed)
+.\Register-WitnessStorage.ps1 -BaseName azlab
+
+# With explicit domain name
+.\Register-WitnessStorage.ps1 -BaseName azlab -DomainName azlab.local
+
+# Re-register (even if already configured)
+.\Register-WitnessStorage.ps1 -BaseName azlab -Force
+```
+
+> **Error 1396** ("target account name is incorrect") during mount verification indicates an AES-256 key mismatch. Re-running with `-Force` will regenerate the key and re-register.
+
+#### 6b. Create Failover Cluster and Configure Quorum
 1. Enable the **Failover Clustering** feature on both AOAG SQL nodes
 2. Create a **Windows Server Failover Cluster** with both Site 2 SQL VMs
-3. Configure **Cloud Witness** quorum using the deployed storage account:
-   ```bash
-   az storage account show --name <storage-account-name> --resource-group {base}-rg-identity --query name
-   az storage account keys list --account-name <storage-account-name> --resource-group {base}-rg-identity --query [0].value
+3. Configure **File Share Witness** quorum:
+   ```powershell
+   Set-ClusterQuorum -Cluster <ClusterName> -FileShareWitness "\\<stg-name>.file.core.windows.net\witness"
    ```
+   Verify: `Get-ClusterQuorum | Select-Object QuorumResource`
+
+#### 6c. Configure Always On Availability Group
 4. Enable **AlwaysOn Availability Groups** in SQL Server Configuration Manager
 5. Create the Availability Group and configure the **AG Listener**:
    - Listener Name: `LISTENER-C`
@@ -728,7 +768,7 @@ Available presets:
 | Resource Group | Contents |
 |---------------|----------|
 | `{base}-rg-network` | VNet, NSGs, Azure Bastion, VPN Gateway, Public IPs |
-| `{base}-rg-identity` | DC01, DC02, Key Vault, Cloud Witness Storage Account |
+| `{base}-rg-identity` | DC01, DC02, Key Vault, File Share Witness Storage Account |
 | `{base}-rg-main` | SQL-CAS, SQL-PrimA, CAS, PrimaryA (SQL VMs omitted when colocated) |
 | `{base}-rg-site1` | SQL-PrimB, PrimaryB (SQL VM omitted when colocated) |
 | `{base}-rg-site2` | SQL AOAG Node 1, SQL AOAG Node 2, Availability Set, ILB, PrimaryC |
@@ -801,7 +841,8 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 
 - [Application Installation (MECM CAS/Primary)](https://learn.microsoft.com/mem/configmgr/core/servers/deploy/install/setup-wizard-central-primary)
 - [Azure ILB for AG Listener](https://learn.microsoft.com/azure/azure-sql/virtual-machines/windows/availability-group-load-balancer-portal-configure)
-- [Cloud Witness for WSFC Quorum](https://learn.microsoft.com/windows-server/failover-clustering/deploy-cloud-witness)
+- [File Share Witness for WSFC Quorum](https://learn.microsoft.com/windows-server/failover-clustering/manage-cluster-quorum#configure-the-cluster-quorum)
+- [Azure Files AD DS Authentication](https://learn.microsoft.com/azure/storage/files/storage-files-identity-ad-ds-enable)
 - [Azure Bastion Documentation](https://learn.microsoft.com/azure/bastion/bastion-overview)
 - [Azure P2S VPN with Certificate Auth](https://learn.microsoft.com/azure/vpn-gateway/vpn-gateway-howto-point-to-site-resource-manager-portal)
 - [Microsoft Entra Connect Sync](https://learn.microsoft.com/entra/identity/hybrid/connect/how-to-connect-install-express)

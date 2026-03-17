@@ -116,6 +116,7 @@ $ous = @(
     @{ Name = 'Lab Servers';        Parent = $domainDN }
     @{ Name = 'SQL Servers';        Parent = "OU=Lab Servers,$domainDN" }
     @{ Name = 'App Servers';        Parent = "OU=Lab Servers,$domainDN" }
+    @{ Name = 'Storage Accounts';   Parent = "OU=Lab Servers,$domainDN" }
 )
 foreach ($ou in $ous) {
     $ouDN = "OU=$($ou.Name),$($ou.Parent)"

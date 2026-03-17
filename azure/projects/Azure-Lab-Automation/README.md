@@ -685,7 +685,7 @@ Available presets:
 3. Configure **Cloud Witness** quorum using the deployed storage account:
    ```bash
    az storage account show --name <storage-account-name> --resource-group {base}-rg-identity --query name
-   az storage account keys list --name <storage-account-name> --resource-group {base}-rg-identity --query [0].value
+   az storage account keys list --account-name <storage-account-name> --resource-group {base}-rg-identity --query [0].value
    ```
 4. Enable **AlwaysOn Availability Groups** in SQL Server Configuration Manager
 5. Create the Availability Group and configure the **AG Listener**:

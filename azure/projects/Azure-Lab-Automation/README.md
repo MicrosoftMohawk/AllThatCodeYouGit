@@ -474,13 +474,12 @@ To connect from a workstation that was **not** used to run `deploy.ps1`, use the
 3. The script will:
    - Import the root CA into `CurrentUser\Trusted Root Certification Authorities`
    - Import the client PFX into `CurrentUser\My` (prompts for the PFX password)
-   - Download the VPN client configuration from Azure (requires Az CLI)
-   - Extract and optionally open the VPN client installer folder
-4. **PFX password**: This is the admin password from Key Vault. Retrieve it with:
+4. **Download the VPN client configuration** manually from the Azure Portal:
+   `{baseName}-vpngw` → Point-to-site configuration → Download VPN client
+5. **PFX password**: This is the admin password from Key Vault. Retrieve it with:
    ```bash
    az keyvault secret show --vault-name {baseName}-kv --name vm-admin-password --query value -o tsv
    ```
-5. **Without Az CLI**: Use `-SkipVpnClientDownload` and download the VPN client manually from the Azure Portal
 
 > **Tip:** You can connect multiple machines — just copy the `certs/` folder and run `Install-VpnCerts.ps1` on each one.
 

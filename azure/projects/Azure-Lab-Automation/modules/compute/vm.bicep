@@ -105,14 +105,29 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
 }
 
 // ---------------------------------------------------------------------------
-// Data Disks (generated array)
+// Data Disks — standalone managed disks so redeploys don't detach existing data
 // ---------------------------------------------------------------------------
+resource dataDisksRes 'Microsoft.Compute/disks@2024-03-02' = [for i in range(0, dataDiskCount): {
+  name: '${vmName}-datadisk-${i}'
+  location: location
+  tags: tags
+  sku: {
+    name: dataDiskSku
+  }
+  properties: {
+    diskSizeGB: dataDiskSizeGb
+    creationData: {
+      createOption: 'Empty'
+    }
+  }
+}]
+
 var dataDisks = [for i in range(0, dataDiskCount): {
   name: '${vmName}-datadisk-${i}'
   lun: i
-  createOption: 'Empty'
-  diskSizeGB: dataDiskSizeGb
+  createOption: 'Attach'
   managedDisk: {
+    id: dataDisksRes[i].id
     storageAccountType: dataDiskSku
   }
   caching: (i == 0) ? 'ReadOnly' : 'None' // first disk (data) = ReadOnly, second (log) = None

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "15946613761752480429"
+      "templateHash": "11115198011713977804"
     }
   },
   "parameters": {
@@ -2199,7 +2199,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -2345,9 +2345,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -2379,6 +2379,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -2433,6 +2453,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -2517,7 +2538,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -2663,9 +2684,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -2697,6 +2718,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -2751,6 +2792,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -3092,7 +3134,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -3238,9 +3280,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -3272,6 +3314,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -3326,6 +3388,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -4095,7 +4158,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -4241,9 +4304,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -4275,6 +4338,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -4329,6 +4412,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -4420,7 +4504,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -4566,9 +4650,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -4600,6 +4684,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -4654,6 +4758,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -4745,7 +4850,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -4891,9 +4996,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -4925,6 +5030,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -4979,6 +5104,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -5076,7 +5202,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -5222,9 +5348,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -5256,6 +5382,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -5310,6 +5456,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -5409,7 +5556,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -5555,9 +5702,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -5589,6 +5736,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -5643,6 +5810,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -6510,7 +6678,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -6656,9 +6824,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -6690,6 +6858,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -6744,6 +6932,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -6829,7 +7018,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -6975,9 +7164,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -7009,6 +7198,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -7063,6 +7272,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -7148,7 +7358,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -7294,9 +7504,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -7328,6 +7538,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -7382,6 +7612,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -7464,7 +7695,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4089574860467970875"
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -7610,9 +7841,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -7644,6 +7875,26 @@
                     }
                   }
                 ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
               }
             },
             {
@@ -7698,6 +7949,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }

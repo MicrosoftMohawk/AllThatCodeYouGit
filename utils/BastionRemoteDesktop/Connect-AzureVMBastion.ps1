@@ -32,9 +32,19 @@
     (Optional) The Azure subscription ID. If not provided, the script offers an interactive
     subscription picker or uses the current active subscription.
 
+.PARAMETER EntraIdLogin
+    (Optional) If specified, configures the RDP session for Entra ID (Azure AD) authentication.
+    Required when connecting to VMs that are pure Entra ID-joined (not domain-joined) from a
+    workstation that is not itself Entra-joined. Disables CredSSP so the Entra ID credential
+    provider is used instead. Sign in as AzureAD\user@yourdomain.com when prompted.
+
 .PARAMETER UseAllMonitors
     (Optional) If specified, attempts to use all monitors. Note: The az network bastion rdp command
     uses default RDP settings and may not honor this parameter. Single monitor is typical default.
+
+.EXAMPLE
+    .\Connect-AzureVMBastion.ps1 -VMName "myVM" -ResourceGroupName "myRG" -BastionName "myBastion" -EntraIdLogin
+    # Connect to an Entra ID-joined VM using Entra credentials.
 
 .EXAMPLE
     .\Connect-AzureVMBastion.ps1
@@ -77,6 +87,9 @@ param(
     [string]$SubscriptionId,
 
     [Parameter(Mandatory = $false)]
+    [switch]$EntraIdLogin,
+
+    [Parameter(Mandatory = $false)]
     [switch]$UseAllMonitors
 )
 
@@ -97,21 +110,58 @@ function Test-AzureCLI {
     return $false
 }
 
-# Function to check Azure CLI login status
+# Function to check Azure CLI login status and prompt to continue or re-login
 function Test-AzureLogin {
     try {
         $account = az account show 2>$null | ConvertFrom-Json
         if ($account) {
-            Write-Host "✓ Already logged in to Azure as: $($account.user.name)" -ForegroundColor Green
-            Write-Host "  Subscription: $($account.name) ($($account.id))" -ForegroundColor Cyan
-            return $true
+            # Verify the session token is still valid
+            $token = az account get-access-token 2>$null | ConvertFrom-Json
+            if (-not $token) {
+                Write-Host "⚠ Azure session has expired for: $($account.user.name)" -ForegroundColor Yellow
+                Write-Host "  A new login is required." -ForegroundColor Yellow
+                return $null
+            }
+
+            Write-Host "✓ Active Azure session detected" -ForegroundColor Green
+            Write-Host "  User:         $($account.user.name)" -ForegroundColor Cyan
+            Write-Host "  Subscription: $($account.name)" -ForegroundColor Cyan
+            Write-Host "  Tenant:       $($account.tenantId)" -ForegroundColor Cyan
+
+            Write-Host "`n  [1] Continue with current session" -ForegroundColor White
+            Write-Host "  [2] Log in with a different account" -ForegroundColor White
+
+            while ($true) {
+                $choice = Read-Host "`nEnter selection (1-2)"
+                switch ($choice) {
+                    '1' {
+                        Write-Host "✓ Continuing with current session" -ForegroundColor Green
+                        return $account
+                    }
+                    '2' {
+                        Write-Host "`nLogging in with a new account..." -ForegroundColor Yellow
+                        az login
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "✗ Failed to log in to Azure" -ForegroundColor Red
+                            return $null
+                        }
+                        $newAccount = az account show 2>$null | ConvertFrom-Json
+                        Write-Host "✓ Logged in as: $($newAccount.user.name)" -ForegroundColor Green
+                        return $newAccount
+                    }
+                    default {
+                        Write-Host "⚠ Invalid selection. Please enter 1 or 2." -ForegroundColor Yellow
+                    }
+                }
+            }
         }
     }
     catch {
-        Write-Host "✗ Not logged in to Azure" -ForegroundColor Red
-        return $false
+        # No active session
     }
-    return $false
+
+    Write-Host "✗ No active Azure session found" -ForegroundColor Red
+    return $null
 }
 
 # Function to check and configure preview extensions
@@ -317,7 +367,8 @@ if (-not (Test-AzureCLI)) {
 }
 
 # Step 2: Check login status
-if (-not (Test-AzureLogin)) {
+$loginResult = Test-AzureLogin
+if (-not $loginResult) {
     Write-Host "`nAttempting to log in to Azure..." -ForegroundColor Yellow
     az login
     if ($LASTEXITCODE -ne 0) {
@@ -423,13 +474,108 @@ if ($bastionConfig.enableTunneling -ne $true) {
 Write-Host "`n=== Initiating RDP Connection ===" -ForegroundColor Cyan
 Write-Host "Connecting to VM via Azure Bastion native client..." -ForegroundColor Yellow
 
-# Create a temporary RDP file with screen configuration
-$rdpTempFile = Join-Path $env:TEMP "bastion_rdp_$(Get-Date -Format 'yyyyMMddHHmmss').rdp"
+if ($EntraIdLogin) {
+    # Entra ID auth requires Bastion to broker the AAD token exchange, so we use
+    # 'az network bastion rdp' directly — it handles tunneling + auth in one step.
+    $monitorMode = if ($UseAllMonitors.IsPresent) { "all monitors" } else { "single monitor" }
+    Write-Host "✓ Using Entra ID authentication (az network bastion rdp --enable-mfa)" -ForegroundColor Green
+    Write-Host "✓ RDP configured for: $monitorMode" -ForegroundColor Green
+    Write-Host "  A browser sign-in prompt will appear for Entra ID credentials" -ForegroundColor Cyan
+    Write-Host ""
 
-Write-Host "Creating RDP configuration file..." -ForegroundColor Yellow
+    $bastionArgs = @(
+        '--name', $BastionName,
+        '--resource-group', $bastionRG,
+        '--target-resource-id', $vmResourceId,
+        '--enable-mfa', 'true'
+    )
 
-# Build RDP file content
-$rdpContent = @"
+    # az network bastion rdp generates a temp RDP file (conn_*.rdp in %TEMP%).
+    # mstsc may cache monitor settings between sessions, so the file may contain
+    # either multimon value regardless of what we want. We intercept the file with
+    # a compiled C# FileSystemWatcher that runs on the .NET ThreadPool — fast
+    # enough to patch the file before mstsc.exe reads it.
+    $desiredMultimon = [int]$UseAllMonitors.IsPresent
+
+    if (-not ([System.Management.Automation.PSTypeName]'BastionRdpMonitorPatcher').Type) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading;
+
+public class BastionRdpMonitorPatcher : IDisposable {
+    private FileSystemWatcher _watcher;
+    private int _desiredValue;
+
+    public BastionRdpMonitorPatcher(string watchPath, int desiredMultimon) {
+        _desiredValue = desiredMultimon;
+        _watcher = new FileSystemWatcher(watchPath, "conn_*.rdp");
+        _watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size;
+        _watcher.Created += PatchHandler;
+        _watcher.Changed += PatchHandler;
+    }
+
+    public void Start() { _watcher.EnableRaisingEvents = true; }
+
+    private void PatchHandler(object sender, FileSystemEventArgs e) {
+        string desired = "use multimon:i:" + _desiredValue;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 5000) {
+            try {
+                string text = File.ReadAllText(e.FullPath);
+                if (text.Contains(desired)) return;
+                string patched = Regex.Replace(text, @"use multimon:i:\d", desired);
+                if (patched != text) {
+                    File.WriteAllText(e.FullPath, patched);
+                    return;
+                }
+            } catch { }
+            Thread.Sleep(1);
+        }
+    }
+
+    public void Dispose() {
+        if (_watcher != null) {
+            _watcher.EnableRaisingEvents = false;
+            _watcher.Dispose();
+            _watcher = null;
+        }
+    }
+}
+"@
+    }
+
+    $rdpPatcher = [BastionRdpMonitorPatcher]::new($env:TEMP, $desiredMultimon)
+    $rdpPatcher.Start()
+
+    az network bastion rdp @bastionArgs
+
+    $exitCode = $LASTEXITCODE
+
+    $rdpPatcher.Dispose()
+
+    if ($exitCode -ne 0) {
+        Write-Host "`n✗ Bastion RDP connection failed (exit code: $exitCode)" -ForegroundColor Red
+        Write-Host "`nPossible causes:" -ForegroundColor Yellow
+        Write-Host "  - Bastion tunneling/native client may not be enabled" -ForegroundColor Gray
+        Write-Host "  - Azure CLI authentication may have expired (try: az login)" -ForegroundColor Gray
+        Write-Host "  - VM may not have the AADLoginForWindows extension installed" -ForegroundColor Gray
+        Write-Host "  - You may not have Virtual Machine Administrator/User Login RBAC on the VM" -ForegroundColor Gray
+        exit 1
+    }
+
+    Write-Host "`n✓ RDP session ended" -ForegroundColor Green
+} else {
+    # Standard RDP: create a tunnel + launch mstsc with a custom RDP file
+
+    # Create a temporary RDP file with screen configuration
+    $rdpTempFile = Join-Path $env:TEMP "bastion_rdp_$(Get-Date -Format 'yyyyMMddHHmmss').rdp"
+
+    Write-Host "Creating RDP configuration file..." -ForegroundColor Yellow
+
+    # Build RDP file content
+    $rdpContent = @"
 screen mode id:i:2
 use multimon:i:$([int]$UseAllMonitors.IsPresent)
 desktopwidth:i:1920
@@ -478,18 +624,18 @@ rdgiskdcproxy:i:0
 kdcproxyname:s:
 "@
 
-$rdpContent | Out-File -FilePath $rdpTempFile -Encoding ASCII -Force
+    $rdpContent | Out-File -FilePath $rdpTempFile -Encoding ASCII -Force
 
-$monitorMode = if ($UseAllMonitors.IsPresent) { "all monitors" } else { "single monitor" }
-Write-Host "✓ RDP configured for: $monitorMode" -ForegroundColor Green
-Write-Host "Note: This will open the native RDP client (mstsc.exe)`n" -ForegroundColor Gray
+    $monitorMode = if ($UseAllMonitors.IsPresent) { "all monitors" } else { "single monitor" }
+    Write-Host "✓ RDP configured for: $monitorMode" -ForegroundColor Green
+    Write-Host "Note: This will open the native RDP client (mstsc.exe)`n" -ForegroundColor Gray
 
-# Start the tunnel
-Write-Host "Starting Bastion tunnel on port 55000..." -ForegroundColor Yellow
+    # Start the tunnel
+    Write-Host "Starting Bastion tunnel on port 55000..." -ForegroundColor Yellow
 
-# Create a temporary script file to run the tunnel command
-$tunnelScriptPath = Join-Path $env:TEMP "bastion_tunnel_$(Get-Date -Format 'yyyyMMddHHmmss').ps1"
-$tunnelScript = @"
+    # Create a temporary script file to run the tunnel command
+    $tunnelScriptPath = Join-Path $env:TEMP "bastion_tunnel_$(Get-Date -Format 'yyyyMMddHHmmss').ps1"
+    $tunnelScript = @"
 Write-Host 'Bastion tunnel starting...' -ForegroundColor Cyan
 az network bastion tunnel ``
     --name '$BastionName' ``
@@ -498,42 +644,64 @@ az network bastion tunnel ``
     --resource-port 3389 ``
     --port 55000
 "@
-$tunnelScript | Out-File -FilePath $tunnelScriptPath -Encoding UTF8 -Force
+    $tunnelScript | Out-File -FilePath $tunnelScriptPath -Encoding UTF8 -Force
 
-# Start the tunnel process
-$tunnelProcess = Start-Process "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$tunnelScriptPath`"" -PassThru -WindowStyle Normal
+    # Start the tunnel process
+    $tunnelProcess = Start-Process "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$tunnelScriptPath`"" -PassThru -WindowStyle Normal
 
-# Wait for the tunnel to establish (check if port 55000 is listening)
-Write-Host "Waiting for tunnel to establish..." -ForegroundColor Yellow
-$maxAttempts = 60
-$attemptCount = 0
-$tunnelReady = $false
+    # Wait for the tunnel to establish (check if port 55000 is listening)
+    Write-Host "Waiting for tunnel to establish..." -ForegroundColor Yellow
+    $maxAttempts = 60
+    $attemptCount = 0
+    $tunnelReady = $false
 
-while ($attemptCount -lt $maxAttempts -and -not $tunnelReady) {
-    Start-Sleep -Seconds 1
-    $attemptCount++
-    
-    # Check if port 55000 is listening
-    $portCheck = Get-NetTCPConnection -LocalPort 55000 -State Listen -ErrorAction SilentlyContinue
-    if ($portCheck) {
-        $tunnelReady = $true
-        Write-Host "✓ Bastion tunnel established on localhost:55000" -ForegroundColor Green
-        # Give the tunnel a moment to stabilize
-        Write-Host "Waiting for tunnel to stabilize..." -ForegroundColor Yellow
-        Start-Sleep -Seconds 3
-        break
-    }
-    
-    # Check if the process has exited (indicating an error)
-    if ($tunnelProcess.HasExited) {
-        Write-Host "`n✗ Tunnel process exited unexpectedly" -ForegroundColor Red
-        Write-Host "Exit Code: $($tunnelProcess.ExitCode)" -ForegroundColor Red
-        Write-Host "`nPossible causes:" -ForegroundColor Yellow
-        Write-Host "  - Bastion tunneling feature may not be enabled" -ForegroundColor Gray
-        Write-Host "  - Azure CLI authentication may have expired (try: az login)" -ForegroundColor Gray
-        Write-Host "  - Insufficient permissions on Bastion or VM resources" -ForegroundColor Gray
-        Write-Host "  - Port 55000 may already be in use" -ForegroundColor Gray
+    while ($attemptCount -lt $maxAttempts -and -not $tunnelReady) {
+        Start-Sleep -Seconds 1
+        $attemptCount++
         
+        # Check if port 55000 is listening
+        $portCheck = Get-NetTCPConnection -LocalPort 55000 -State Listen -ErrorAction SilentlyContinue
+        if ($portCheck) {
+            $tunnelReady = $true
+            Write-Host "✓ Bastion tunnel established on localhost:55000" -ForegroundColor Green
+            # Give the tunnel a moment to stabilize
+            Write-Host "Waiting for tunnel to stabilize..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+            break
+        }
+        
+        # Check if the process has exited (indicating an error)
+        if ($tunnelProcess.HasExited) {
+            Write-Host "`n✗ Tunnel process exited unexpectedly" -ForegroundColor Red
+            Write-Host "Exit Code: $($tunnelProcess.ExitCode)" -ForegroundColor Red
+            Write-Host "`nPossible causes:" -ForegroundColor Yellow
+            Write-Host "  - Bastion tunneling feature may not be enabled" -ForegroundColor Gray
+            Write-Host "  - Azure CLI authentication may have expired (try: az login)" -ForegroundColor Gray
+            Write-Host "  - Insufficient permissions on Bastion or VM resources" -ForegroundColor Gray
+            Write-Host "  - Port 55000 may already be in use" -ForegroundColor Gray
+            
+            if (Test-Path $rdpTempFile) {
+                Remove-Item $rdpTempFile -Force
+            }
+            if (Test-Path $tunnelScriptPath) {
+                Remove-Item $tunnelScriptPath -Force
+            }
+            exit 1
+        }
+        
+        if ($attemptCount % 5 -eq 0) {
+            Write-Host "  Still waiting... ($attemptCount seconds)" -ForegroundColor Gray
+        }
+    }
+
+    if (-not $tunnelReady) {
+        Write-Host "`n✗ Tunnel failed to establish within $maxAttempts seconds" -ForegroundColor Red
+        Write-Host "The tunnel process is still running. Check the tunnel window for errors." -ForegroundColor Yellow
+        
+        # Cleanup
+        if (-not $tunnelProcess.HasExited) {
+            Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
+        }
         if (Test-Path $rdpTempFile) {
             Remove-Item $rdpTempFile -Force
         }
@@ -542,45 +710,24 @@ while ($attemptCount -lt $maxAttempts -and -not $tunnelReady) {
         }
         exit 1
     }
-    
-    if ($attemptCount % 5 -eq 0) {
-        Write-Host "  Still waiting... ($attemptCount seconds)" -ForegroundColor Gray
-    }
-}
 
-if (-not $tunnelReady) {
-    Write-Host "`n✗ Tunnel failed to establish within $maxAttempts seconds" -ForegroundColor Red
-    Write-Host "The tunnel process is still running. Check the tunnel window for errors." -ForegroundColor Yellow
-    
+    # Launch RDP client with the configuration file
+    Write-Host "Launching RDP client..." -ForegroundColor Yellow
+    Start-Process "mstsc.exe" -ArgumentList $rdpTempFile
+
+    Write-Host "`n✓ RDP client launched successfully" -ForegroundColor Green
+    Write-Host "`nThe Bastion tunnel will remain active. Close the tunnel PowerShell window when done." -ForegroundColor Cyan
+    Write-Host "Press Enter to cleanup temporary files and exit this script..." -ForegroundColor Yellow
+    Read-Host
+
     # Cleanup
-    if (-not $tunnelProcess.HasExited) {
-        Stop-Process -Id $tunnelProcess.Id -Force -ErrorAction SilentlyContinue
-    }
     if (Test-Path $rdpTempFile) {
         Remove-Item $rdpTempFile -Force
     }
     if (Test-Path $tunnelScriptPath) {
         Remove-Item $tunnelScriptPath -Force
     }
-    exit 1
+
+    Write-Host "`n✓ Cleanup complete" -ForegroundColor Green
+    Write-Host "Note: The tunnel process is still running. Close its window to terminate the tunnel." -ForegroundColor Gray
 }
-
-# Launch RDP client with the configuration file
-Write-Host "Launching RDP client..." -ForegroundColor Yellow
-Start-Process "mstsc.exe" -ArgumentList $rdpTempFile
-
-Write-Host "`n✓ RDP client launched successfully" -ForegroundColor Green
-Write-Host "`nThe Bastion tunnel will remain active. Close the tunnel PowerShell window when done." -ForegroundColor Cyan
-Write-Host "Press Enter to cleanup temporary files and exit this script..." -ForegroundColor Yellow
-Read-Host
-
-# Cleanup
-if (Test-Path $rdpTempFile) {
-    Remove-Item $rdpTempFile -Force
-}
-if (Test-Path $tunnelScriptPath) {
-    Remove-Item $tunnelScriptPath -Force
-}
-
-Write-Host "`n✓ Cleanup complete" -ForegroundColor Green
-Write-Host "Note: The tunnel process is still running. Close its window to terminate the tunnel." -ForegroundColor Gray

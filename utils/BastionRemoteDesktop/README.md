@@ -11,6 +11,10 @@ Azure Bastion allows secure, browser-based or native client-based connectivity t
 This script simplifies connecting to your VM via **Azure Bastion** using **RDP**, the **Azure CLI**, and a **local tunnel (port 55000)**.
 When run **without parameters**, the script enters **interactive mode** — it queries your Azure environment and presents numbered selection menus to discover and choose subscriptions, Bastion hosts, resource groups, and VMs. When parameters are provided on the command line, those prompts are skipped for **full backward compatibility**.
 
+The script supports two connection modes:
+- **Standard mode** — Creates a Bastion tunnel on port 55000 and launches mstsc with a custom RDP file
+- **Entra ID mode** (`-EntraIdLogin`) — Uses `az network bastion rdp --enable-mfa` to connect directly to Entra ID-joined VMs with browser-based sign-in
+
 ---
 
 ## ⚙️ Requirements
@@ -37,6 +41,7 @@ Before using the script, ensure you have:
 | **BastionResourceGroupName** | ❌ | Resource group of the Bastion host, when it differs from the VM resource group. Auto-populated in interactive mode. Defaults to `ResourceGroupName` if omitted |
 | **SubscriptionId** | ❌ | Azure Subscription ID. If omitted, the script offers an interactive subscription picker |
 | **UseAllMonitors** | ❌ | Enables multi-monitor mode when launching RDP (defaults to single monitor) |
+| **EntraIdLogin** | ❌ | Uses Entra ID authentication via `az network bastion rdp --enable-mfa`. Required for VMs joined to Entra ID (AADLoginForWindows extension). Triggers a browser sign-in prompt |
 
 ---
 
@@ -74,6 +79,17 @@ Before using the script, ensure you have:
 .\Connect-AzureVMBastion.ps1 -VMName "myVM" -ResourceGroupName "myRG" -BastionName "myBastion" -UseAllMonitors
 ```
 
+**Connect to an Entra ID-joined VM (single monitor):**
+```powershell
+.\Connect-AzureVMBastion.ps1 -EntraIdLogin
+# A browser sign-in prompt will appear for Entra ID credentials.
+```
+
+**Connect to an Entra ID-joined VM (all monitors):**
+```powershell
+.\Connect-AzureVMBastion.ps1 -EntraIdLogin -UseAllMonitors
+```
+
 ---
 
 ## 🔍 What the Script Does
@@ -86,10 +102,10 @@ Before using the script, ensure you have:
 6. **Interactive VM selection** — lists VMs in the selected resource group and lets you choose (skipped if `-VMName` is provided)
 7. **Retrieves VM and Bastion Resource IDs**
 8. **Validates tunneling support** on the Bastion host
-9. **Starts Azure Bastion tunnel** on local port 55000
-10. **Creates a temporary RDP configuration file**
-11. **Launches mstsc.exe** (Remote Desktop Connection)
-12. **Cleans up temporary tunnel/RDP files** after session ends
+9. **Connects to the VM** using one of two modes:
+   - **Standard mode:** Starts a Bastion tunnel on port 55000, creates a temporary RDP file, and launches mstsc.exe
+   - **Entra ID mode (`-EntraIdLogin`):** Runs `az network bastion rdp --enable-mfa` which handles tunneling and Entra ID token brokering in a single step. A browser sign-in prompt appears for authentication. Single monitor is enforced by default; use `-UseAllMonitors` for multi-monitor
+10. **Cleans up** temporary tunnel/RDP files after session ends
 
 ---
 
@@ -105,9 +121,11 @@ If the tunnel fails or closes unexpectedly:
 
 ## 🧰 Notes
 
-- The Bastion tunnel remains active in a separate PowerShell window until manually closed.  
+- **Standard mode:** The Bastion tunnel remains active in a separate PowerShell window until manually closed.  
+- **Entra ID mode:** The connection is managed entirely by `az network bastion rdp` — no separate tunnel window is created.
 - On exit, temporary `.rdp` and `.ps1` helper files are safely removed.  
 - Script works best on **Windows hosts with mstsc.exe** (native RDP client).
+- Entra ID-joined VMs require the **AADLoginForWindows** VM extension and **Virtual Machine Administrator Login** (or User Login) RBAC role assignment.
 
 ---
 
@@ -118,6 +136,7 @@ If the tunnel fails or closes unexpectedly:
 | 2025-12-18 | 1.0 | Initial custom initiative deployment |
 | 2026-01-02 | 1.0 | Code updates |
 | 2026-01-03 | 1.0 | Code enhancements |
+| 2026-03-12 | 1.1 | Added `-EntraIdLogin` switch for Entra ID-joined VMs via `az network bastion rdp --enable-mfa`. Single monitor enforced by default; `-UseAllMonitors` for multi-monitor |
 | 2026-02-23 | 1.1 | Added interactive resource discovery (subscription, Bastion, resource group, VM selection). Added BastionResourceGroupName parameter for cross-RG Bastion support. All parameters now optional with backward compatibility |
 
 ---

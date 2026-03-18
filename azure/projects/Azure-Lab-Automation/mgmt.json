@@ -1,0 +1,678 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "6036646680731180859"
+    }
+  },
+  "parameters": {
+    "baseName": {
+      "type": "string",
+      "maxLength": 10,
+      "metadata": {
+        "description": "Base name prefix from the main lab deployment"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region (must match the main lab deployment)"
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "labadmin",
+      "metadata": {
+        "description": "Local administrator username"
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Local administrator password (same as main lab deployment)"
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v5",
+      "metadata": {
+        "description": "VM size"
+      }
+    },
+    "privateIpAddress": {
+      "type": "string",
+      "defaultValue": "10.0.1.7",
+      "metadata": {
+        "description": "Static IP for management VM (must be in AD subnet range)"
+      }
+    },
+    "deployerObjectId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra ID object ID of the user to grant VM Administrator Login RBAC (leave empty to skip)"
+      }
+    },
+    "principalType": {
+      "type": "string",
+      "defaultValue": "User",
+      "allowedValues": [
+        "User",
+        "Group"
+      ],
+      "metadata": {
+        "description": "Principal type for RBAC assignment"
+      }
+    },
+    "imagePublisher": {
+      "type": "string",
+      "defaultValue": "MicrosoftWindowsServer",
+      "metadata": {
+        "description": "Windows Server image publisher"
+      }
+    },
+    "imageOffer": {
+      "type": "string",
+      "defaultValue": "WindowsServer",
+      "metadata": {
+        "description": "Windows Server image offer"
+      }
+    },
+    "imageSku": {
+      "type": "string",
+      "defaultValue": "2022-datacenter-g2",
+      "metadata": {
+        "description": "Windows Server image SKU"
+      }
+    }
+  },
+  "variables": {
+    "vmName": "[format('{0}-mgmt', parameters('baseName'))]",
+    "vnetName": "[format('{0}-vnet', parameters('baseName'))]",
+    "rgNetwork": "[format('{0}-rg-network', parameters('baseName'))]",
+    "commonTags": {
+      "env": "lab",
+      "project": "azure-lab",
+      "deployedBy": "bicep"
+    },
+    "snetAdId": "[format('{0}/subnets/snet-ad', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Network/virtualNetworks', variables('vnetName')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-mgmt-vm",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "[variables('vmName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "vmSize": {
+            "value": "[parameters('vmSize')]"
+          },
+          "subnetId": {
+            "value": "[variables('snetAdId')]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "imagePublisher": {
+            "value": "[parameters('imagePublisher')]"
+          },
+          "imageOffer": {
+            "value": "[parameters('imageOffer')]"
+          },
+          "imageSku": {
+            "value": "[parameters('imageSku')]"
+          },
+          "privateIpAddress": {
+            "value": "[parameters('privateIpAddress')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('role', 'management-console'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "18432750913663090032"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "maxLength": 15,
+              "metadata": {
+                "description": "Name of the virtual machine (also used as computer name)"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for deployment"
+              }
+            },
+            "vmSize": {
+              "type": "string",
+              "metadata": {
+                "description": "VM size SKU"
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the subnet for the NIC"
+              }
+            },
+            "adminUsername": {
+              "type": "string",
+              "metadata": {
+                "description": "Local admin username"
+              }
+            },
+            "adminPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Local admin password"
+              }
+            },
+            "imagePublisher": {
+              "type": "string",
+              "defaultValue": "MicrosoftWindowsServer",
+              "metadata": {
+                "description": "OS image publisher"
+              }
+            },
+            "imageOffer": {
+              "type": "string",
+              "defaultValue": "WindowsServer",
+              "metadata": {
+                "description": "OS image offer"
+              }
+            },
+            "imageSku": {
+              "type": "string",
+              "defaultValue": "2022-datacenter-g2",
+              "metadata": {
+                "description": "OS image SKU"
+              }
+            },
+            "imageVersion": {
+              "type": "string",
+              "defaultValue": "latest",
+              "metadata": {
+                "description": "OS image version"
+              }
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional static private IP address. Leave empty for dynamic allocation."
+              }
+            },
+            "dataDiskCount": {
+              "type": "int",
+              "defaultValue": 0,
+              "minValue": 0,
+              "maxValue": 4,
+              "metadata": {
+                "description": "Number of data disks to attach (each 128 GB Premium SSD)"
+              }
+            },
+            "dataDiskSizeGb": {
+              "type": "int",
+              "defaultValue": 128,
+              "metadata": {
+                "description": "Size of each data disk in GB"
+              }
+            },
+            "dataDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for data disks"
+              }
+            },
+            "availabilitySetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional: Availability Set resource ID"
+              }
+            },
+            "loadBalancerBackendPoolId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional: Load Balancer backend address pool resource ID (for ILB association)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags to apply to all resources"
+              }
+            }
+          },
+          "variables": {
+            "copy": [
+              {
+                "name": "dataDisks",
+                "count": "[length(range(0, parameters('dataDiskCount')))]",
+                "input": {
+                  "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
+                  "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
+                  "createOption": "Empty",
+                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "managedDisk": {
+                    "storageAccountType": "[parameters('dataDiskSku')]"
+                  },
+                  "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
+                }
+              }
+            ],
+            "nicName": "[format('{0}-nic', parameters('vmName'))]",
+            "useStaticIp": "[not(empty(parameters('privateIpAddress')))]",
+            "useLb": "[not(empty(parameters('loadBalancerBackendPoolId')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-11-01",
+              "name": "[variables('nicName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "privateIPAllocationMethod": "[if(variables('useStaticIp'), 'Static', 'Dynamic')]",
+                      "privateIPAddress": "[if(variables('useStaticIp'), parameters('privateIpAddress'), null())]",
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('vmName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "availabilitySet": "[if(not(empty(parameters('availabilitySetId'))), createObject('id', parameters('availabilitySetId')), null())]",
+                "osProfile": {
+                  "computerName": "[parameters('vmName')]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "windowsConfiguration": {
+                    "provisionVMAgent": true,
+                    "enableAutomaticUpdates": true
+                  }
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "[parameters('imagePublisher')]",
+                    "offer": "[parameters('imageOffer')]",
+                    "sku": "[parameters('imageSku')]",
+                    "version": "[parameters('imageVersion')]"
+                  },
+                  "osDisk": {
+                    "name": "[format('{0}-osdisk', parameters('vmName'))]",
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                      "storageAccountType": "Premium_LRS"
+                    },
+                    "caching": "ReadWrite",
+                    "diskSizeGB": 128
+                  },
+                  "dataDisks": "[variables('dataDisks')]"
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+                    }
+                  ]
+                },
+                "diagnosticsProfile": {
+                  "bootDiagnostics": {
+                    "enabled": true
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vmId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+            },
+            "vmName": {
+              "type": "string",
+              "value": "[parameters('vmName')]"
+            },
+            "nicId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', variables('nicName')), '2023-11-01').ipConfigurations[0].properties.privateIPAddress]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-entra-login-mgmt",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "[variables('vmName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('role', 'entra-id-join'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "9489364511102623246"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the existing VM to enable Entra ID login on"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/EntraDnsCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        $targets = @('login.microsoftonline.com', 'enterpriseregistration.windows.net')\r\n        $maxAttempts = 30\r\n        $sleepSec = 10\r\n\r\n        Clear-DnsClientCache\r\n        Write-Output \"Checking Entra ID DNS readiness...\"\r\n\r\n        foreach ($target in $targets) {\r\n            $resolved = $false\r\n            for ($i = 1; $i -le $maxAttempts; $i++) {\r\n                Clear-DnsClientCache\r\n                $result = Resolve-DnsName -Name $target -Type A -ErrorAction SilentlyContinue\r\n                if ($result) {\r\n                    Write-Output \"DNS ready on attempt $i -- resolved $target to $($result[0].IPAddress)\"\r\n                    $resolved = $true\r\n                    break\r\n                }\r\n                Write-Output \"Attempt $i/$maxAttempts -- $target not yet resolvable, waiting ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n            }\r\n            if (-not $resolved) {\r\n                Write-Output \"FAILED: Could not resolve $target after $maxAttempts attempts\"\r\n                Write-Output \"DNS servers configured on this VM:\"\r\n                Get-DnsClientServerAddress -AddressFamily IPv4 | Format-Table -AutoSize | Out-String | Write-Output\r\n                exit 1\r\n            }\r\n        }\r\n\r\n        Write-Output \"All Entra ID endpoints resolvable -- proceeding with AAD join\"\r\n        exit 0\r\n      "
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/AADLoginForWindows', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "publisher": "Microsoft.Azure.ActiveDirectory",
+                "type": "AADLoginForWindows",
+                "typeHandlerVersion": "2.2",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "mdmId": ""
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/EntraDnsCheck', parameters('vmName')), '/')[0], split(format('{0}/EntraDnsCheck', parameters('vmName')), '/')[1])]"
+              ]
+            }
+          ],
+          "outputs": {
+            "extensionId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/AADLoginForWindows', parameters('vmName')), '/')[0], split(format('{0}/AADLoginForWindows', parameters('vmName')), '/')[1])]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-mgmt-vm')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-mgmt-tools",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "[variables('vmName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('role', 'management-tools'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "13598799122783883767"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the VM to install management tools on"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "variables": {
+            "$fxv#0": "<#\r\n.SYNOPSIS\r\n    Install management tools on the Entra ID-joined management VM.\r\n    Runs as a VM RunCommand after the VM is provisioned and joined.\r\n\r\n.DESCRIPTION\r\n    Installs the following tools for hybrid environment management:\r\n    - RSAT (Remote Server Administration Tools) for AD, DNS, Group Policy\r\n    - Azure PowerShell module (Az)\r\n    - Azure CLI\r\n    - SQL Server PowerShell module (SqlServer)\r\n#>\r\n\r\n$ErrorActionPreference = 'Stop'\r\nStart-Transcript -Path 'C:\\WindowsTemp\\Install-ManagementTools.log' -Append\r\n\r\n# ============================================================================\r\n# Install RSAT Features\r\n# ============================================================================\r\nWrite-Output 'Installing RSAT features...'\r\n$rsatFeatures = @(\r\n    'RSAT-AD-Tools'\r\n    'RSAT-AD-AdminCenter'\r\n    'RSAT-AD-PowerShell'\r\n    'RSAT-DNS-Server'\r\n    'GPMC'\r\n)\r\n\r\nforeach ($feature in $rsatFeatures) {\r\n    $installed = Get-WindowsFeature -Name $feature -ErrorAction SilentlyContinue\r\n    if ($installed -and $installed.Installed) {\r\n        Write-Output \"  Already installed: $feature\"\r\n    } else {\r\n        Install-WindowsFeature -Name $feature -IncludeManagementTools -ErrorAction Stop\r\n        Write-Output \"  Installed: $feature\"\r\n    }\r\n}\r\n\r\n# ============================================================================\r\n# Install PowerShell Modules\r\n# ============================================================================\r\nWrite-Output 'Installing PowerShell modules...'\r\n\r\n# Trust PSGallery to avoid interactive prompts\r\nif ((Get-PSRepository -Name 'PSGallery').InstallationPolicy -ne 'Trusted') {\r\n    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted\r\n}\r\n\r\n# Install NuGet provider if needed\r\n$nuget = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue\r\nif (-not $nuget -or $nuget.Version -lt [version]'2.8.5.201') {\r\n    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null\r\n    Write-Output '  NuGet package provider installed'\r\n}\r\n\r\n$modules = @('Az', 'SqlServer')\r\nforeach ($mod in $modules) {\r\n    if (Get-Module -Name $mod -ListAvailable -ErrorAction SilentlyContinue) {\r\n        Write-Output \"  Already installed: $mod module\"\r\n    } else {\r\n        Write-Output \"  Installing $mod module (this may take a few minutes)...\"\r\n        Install-Module -Name $mod -Scope AllUsers -Force -AllowClobber\r\n        Write-Output \"  Installed: $mod module\"\r\n    }\r\n}\r\n\r\n# ============================================================================\r\n# Install Azure CLI\r\n# ============================================================================\r\nWrite-Output 'Installing Azure CLI...'\r\nif (Get-Command az -ErrorAction SilentlyContinue) {\r\n    Write-Output '  Azure CLI already installed'\r\n} else {\r\n    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n    $cliUrl = 'https://aka.ms/installazurecliwindowsx64'\r\n    $cliInstaller = 'C:\\WindowsTemp\\AzureCLI.msi'\r\n\r\n    $wc = New-Object System.Net.WebClient\r\n    $wc.DownloadFile($cliUrl, $cliInstaller)\r\n\r\n    $msiArgs = '/i', $cliInstaller, '/quiet', '/norestart', '/log', 'C:\\WindowsTemp\\AzureCLI-Install.log'\r\n    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArgs -Wait -PassThru\r\n\r\n    if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {\r\n        Write-Output \"  Azure CLI installed (exit code: $($proc.ExitCode))\"\r\n    } else {\r\n        Write-Output \"  WARNING: Azure CLI install returned exit code $($proc.ExitCode). Check C:\\WindowsTemp\\AzureCLI-Install.log\"\r\n    }\r\n}\r\n\r\n# ============================================================================\r\n# Summary\r\n# ============================================================================\r\nWrite-Output ''\r\nWrite-Output '=========================================='\r\nWrite-Output ' Management Tools Installation Complete'\r\nWrite-Output '=========================================='\r\nWrite-Output ' RSAT: AD Tools, DNS Server, Group Policy Management Console'\r\nWrite-Output ' PowerShell: Az module, SqlServer module'\r\nWrite-Output ' CLI: Azure CLI'\r\nWrite-Output '=========================================='\r\n\r\nStop-Transcript\r\n"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/InstallManagementTools', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 1800,
+                "source": {
+                  "script": "[variables('$fxv#0')]"
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "runCommandId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/InstallManagementTools', parameters('vmName')), '/')[0], split(format('{0}/InstallManagementTools', parameters('vmName')), '/')[1])]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-entra-login-mgmt')]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('deployerObjectId')))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-mgmt-vm-rbac",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "[variables('vmName')]"
+          },
+          "principalId": {
+            "value": "[parameters('deployerObjectId')]"
+          },
+          "principalType": {
+            "value": "[parameters('principalType')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "6955026383296841237"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the VM to assign the role on"
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Entra ID object ID of the principal to grant VM admin login"
+              }
+            },
+            "principalType": {
+              "type": "string",
+              "defaultValue": "User",
+              "allowedValues": [
+                "User",
+                "Group",
+                "ServicePrincipal"
+              ],
+              "metadata": {
+                "description": "Principal type (User, Group, or ServicePrincipal)"
+              }
+            }
+          },
+          "variables": {
+            "vmAdminLoginRoleId": "1c0163c0-47e6-4577-8991-ea5c82e286e4"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+              "name": "[guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), parameters('principalId'), variables('vmAdminLoginRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('vmAdminLoginRoleId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "[parameters('principalType')]"
+              }
+            }
+          ],
+          "outputs": {
+            "roleAssignmentId": {
+              "type": "string",
+              "value": "[extensionResourceId(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), parameters('principalId'), variables('vmAdminLoginRoleId')))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-mgmt-vm')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "vmName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-mgmt-vm'), '2025-04-01').outputs.vmName.value]"
+    },
+    "privateIpAddress": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-mgmt-vm'), '2025-04-01').outputs.privateIpAddress.value]"
+    }
+  }
+}

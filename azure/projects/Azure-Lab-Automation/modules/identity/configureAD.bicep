@@ -17,6 +17,12 @@ param domainName string
 @secure()
 param svcAccountPassword string
 
+@description('Entra ID tenant domain for UPN suffix (empty to skip)')
+param entraIdDomain string = ''
+
+@description('Domain strategy: subdomain or independent')
+param domainStrategy string = 'subdomain'
+
 @description('Tags')
 param tags object = {}
 
@@ -44,6 +50,14 @@ resource configureAD 'Microsoft.Compute/virtualMachines/runCommands@2024-03-01' 
       {
         name: 'DomainName'
         value: domainName
+      }
+      {
+        name: 'EntraIdDomain'
+        value: entraIdDomain
+      }
+      {
+        name: 'DomainStrategy'
+        value: domainStrategy
       }
     ]
   }

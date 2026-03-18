@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Configure Active Directory — OUs, Security Groups, Service Accounts, gMSA
+    Configure Active Directory -- OUs, Security Groups, Service Accounts, gMSA
     Runs as a VM RunCommand on the first domain controller after forest promotion.
 
 .PARAMETER DomainName
@@ -8,13 +8,27 @@
 
 .PARAMETER SvcPassword
     Password for service accounts (passed as protectedParameter)
+
+.PARAMETER EntraIdDomain
+    Entra ID tenant domain (e.g., usaavd.com). When specified with
+    DomainStrategy='independent', this is added as a UPN suffix to the AD forest.
+
+.PARAMETER DomainStrategy
+    'subdomain' = AD domain is a subdomain of EntraIdDomain (UPNs already match)
+    'independent' = AD domain is separate; EntraIdDomain added as UPN suffix
 #>
 param(
     [Parameter(Mandatory)]
     [string]$DomainName,
 
     [Parameter(Mandatory)]
-    [string]$SvcPassword
+    [string]$SvcPassword,
+
+    [Parameter()]
+    [string]$EntraIdDomain = '',
+
+    [Parameter()]
+    [string]$DomainStrategy = 'subdomain'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,7 +58,7 @@ $svcSecure = ConvertTo-SecureString $SvcPassword -AsPlainText -Force
 $domainDN = ($DomainName -split '\.' | ForEach-Object { "DC=$_" }) -join ','
 
 # ============================================================================
-# Configure DNS Forwarder — Azure internal DNS (168.63.129.16)
+# Configure DNS Forwarder -- Azure internal DNS (168.63.129.16)
 # ============================================================================
 # The DC's DNS server is authoritative for the AD zone only.  Without a
 # forwarder, VMs using the DC as their DNS server cannot resolve public names
@@ -52,17 +66,42 @@ $domainDN = ($DomainName -split '\.' | ForEach-Object { "DC=$_" }) -join ','
 # Azure's wireserver DNS (168.63.129.16) resolves all public + Azure private
 # DNS names and is reachable from every Azure VM.
 # ============================================================================
-Write-Output "Configuring DNS forwarder to Azure DNS (168.63.129.16)..."
+Write-Output "Configuring DNS forwarder to Azure DNS (168.63.129.16) on ALL domain controllers..."
 try {
-    $existing = (Get-DnsServerForwarder).IPAddress.IPAddressToString
-    if ($existing -notcontains '168.63.129.16') {
-        Add-DnsServerForwarder -IPAddress '168.63.129.16' -PassThru | Out-Null
-        Write-Output "  DNS forwarder added: 168.63.129.16"
-    } else {
-        Write-Output "  DNS forwarder already configured: 168.63.129.16"
+    $allDCs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName
+    foreach ($dc in $allDCs) {
+        try {
+            # Use Set (not Add) to ensure 168.63.129.16 is the ONLY forwarder.
+            # Add-DnsServerForwarder can leave stale entries (e.g., other DC IPs)
+            # which cause forwarding loops or bypass Azure Private DNS zones.
+            Set-DnsServerForwarder -ComputerName $dc -IPAddress '168.63.129.16'
+            Write-Output "  DNS forwarder set on ${dc}: 168.63.129.16"
+        } catch {
+            Write-Output "  WARNING: Failed to configure DNS forwarder on ${dc} (non-fatal): $_"
+        }
     }
 } catch {
-    Write-Output "  WARNING: Failed to configure DNS forwarder (non-fatal): $_"
+    Write-Output "  WARNING: Failed to enumerate domain controllers (non-fatal): $_"
+}
+
+# ============================================================================
+# Add Entra ID UPN Suffix (independent domain strategy only)
+# ============================================================================
+if (-not [string]::IsNullOrWhiteSpace($EntraIdDomain) -and $DomainStrategy -eq 'independent') {
+    Write-Output "Adding Entra ID UPN suffix: $EntraIdDomain..."
+    try {
+        $forest = Get-ADForest
+        if ($forest.UPNSuffixes -notcontains $EntraIdDomain) {
+            Set-ADForest -Identity $forest.Name -UPNSuffixes @{Add=$EntraIdDomain}
+            Write-Output "  UPN suffix added: $EntraIdDomain"
+        } else {
+            Write-Output "  UPN suffix already exists: $EntraIdDomain"
+        }
+    } catch {
+        Write-Output "  WARNING: Failed to add UPN suffix (non-fatal): $_"
+    }
+} elseif (-not [string]::IsNullOrWhiteSpace($EntraIdDomain)) {
+    Write-Output "Skipping UPN suffix -- domain strategy is '$DomainStrategy' (subdomain UPNs match Entra ID)"
 }
 
 # ============================================================================
@@ -77,6 +116,7 @@ $ous = @(
     @{ Name = 'Lab Servers';        Parent = $domainDN }
     @{ Name = 'SQL Servers';        Parent = "OU=Lab Servers,$domainDN" }
     @{ Name = 'App Servers';        Parent = "OU=Lab Servers,$domainDN" }
+    @{ Name = 'Storage Accounts';   Parent = "OU=Lab Servers,$domainDN" }
 )
 foreach ($ou in $ous) {
     $ouDN = "OU=$($ou.Name),$($ou.Parent)"
@@ -131,6 +171,7 @@ $svcAccounts = @(
 # --- Admin accounts (placed in OU=Admins,OU=Lab Accounts) --------------------
 $adminOU = "OU=Admins,OU=Lab Accounts,$domainDN"
 $adminAccounts = @(
+    @{ Name = 'lab-admin';  Desc = 'Lab infrastructure admin (delegated OU management)'; Groups = @('GRP-ServerAdmins', 'GRP-SQLAdmins', 'GRP-AppAdmins', 'GRP-MCMAdmins') }
     @{ Name = 'mcm-admin';  Desc = 'MCM Administrator account'; Groups = @('GRP-AppAdmins', 'GRP-MCMAdmins') }
     @{ Name = 'sql-admin';  Desc = 'SQL Administrator account';  Groups = @('GRP-SQLAdmins') }
 )
@@ -212,11 +253,45 @@ try {
 }
 
 # ============================================================================
+# Delegate OU Management to lab-admin
+# ============================================================================
+# lab-admin gets GenericAll (full control) over the Lab OUs so it can manage
+# users, groups, computers, and child OUs without being a Domain Admin.
+Write-Output "Delegating OU management to lab-admin..."
+try {
+    $labAdminUser = Get-ADUser -Identity 'lab-admin'
+    $labAdminSid = New-Object System.Security.Principal.SecurityIdentifier($labAdminUser.SID)
+    $guidNull = [guid]'00000000-0000-0000-0000-000000000000'
+
+    $delegateOUs = @(
+        "OU=Lab Servers,$domainDN"
+        "OU=Lab Accounts,$domainDN"
+        "OU=Lab Groups,$domainDN"
+    )
+    foreach ($ouDN in $delegateOUs) {
+        $acl = Get-Acl "AD:\$ouDN"
+        $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+            $labAdminSid, 'GenericAll', 'Allow', 'Descendents', $guidNull
+        )
+        $acl.AddAccessRule($ace)
+        Set-Acl "AD:\$ouDN" $acl
+        Write-Output "  Delegated full control on: $ouDN"
+    }
+
+    # Also grant lab-admin local admin on domain-joined servers via
+    # membership in GRP-ServerAdmins (GPO or restricted groups expected
+    # to map GRP-ServerAdmins to the local Administrators group).
+    Write-Output "  lab-admin delegated over Lab Servers, Lab Accounts, Lab Groups"
+} catch {
+    Write-Output "  WARNING: lab-admin OU delegation failed (non-fatal): $_"
+}
+
+# ============================================================================
 # Create Group Managed Service Account (gMSA) for SQL Server
 # ============================================================================
 Write-Output "Creating gMSA: gmsa-sqlsvc..."
 try {
-    # Create KDS Root Key — use EffectiveTime in the past for lab (immediate effect)
+    # Create KDS Root Key -- use EffectiveTime in the past for lab (immediate effect)
     if (-not (Get-KdsRootKey -ErrorAction SilentlyContinue)) {
         Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))
         Write-Output "  Created KDS Root Key (effective immediately for lab)"
@@ -252,9 +327,22 @@ Write-Output " Domain DN: $domainDN"
 Write-Output " OUs:       Lab Accounts, Service Accounts, Admins, Lab Groups, Lab Servers, SQL Servers, App Servers"
 Write-Output " Groups:    GRP-DomainAdmins-Lab (manual), GRP-SQLAdmins, GRP-AppAdmins, GRP-MCMAdmins, GRP-ServerAdmins, GRP-DomainJoin"
 Write-Output " Accounts:  svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa"
-Write-Output " Admins:    mcm-admin, sql-admin"
+Write-Output " Admins:    lab-admin (delegated OU admin), mcm-admin, sql-admin"
 Write-Output " gMSA:      gmsa-sqlsvc"
-Write-Output " DNS Fwd:   168.63.129.16 (Azure internal DNS)"
+Write-Output " DNS Fwd:   168.63.129.16 (Azure internal DNS) -- all DCs"
+if (-not [string]::IsNullOrWhiteSpace($EntraIdDomain)) {
+    Write-Output " Entra ID:  $EntraIdDomain (strategy: $DomainStrategy)"
+}
 Write-Output "=========================================="
 
 Stop-Transcript
+
+# Redact the password from the transcript log. The RunCommand handler passes
+# protectedParameters as command-line arguments, so the SvcPassword value
+# appears in the transcript header (the "Command line:" field).
+$logPath = "C:\WindowsTemp\ConfigureAD.log"
+if ((Test-Path $logPath) -and -not [string]::IsNullOrWhiteSpace($SvcPassword)) {
+    $raw = [System.IO.File]::ReadAllText($logPath)
+    $redacted = $raw.Replace($SvcPassword, '********')
+    [System.IO.File]::WriteAllText($logPath, $redacted)
+}

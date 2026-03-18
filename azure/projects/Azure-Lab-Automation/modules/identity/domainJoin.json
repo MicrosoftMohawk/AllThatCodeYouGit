@@ -1,0 +1,114 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "1995510310399443685"
+    }
+  },
+  "parameters": {
+    "vmName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing VM to domain-join"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region"
+      }
+    },
+    "domainName": {
+      "type": "string",
+      "metadata": {
+        "description": "Fully qualified domain name (e.g., azlab.local)"
+      }
+    },
+    "domainJoinUser": {
+      "type": "string",
+      "metadata": {
+        "description": "UPN or DOMAIN\\user with permission to join machines to the domain"
+      }
+    },
+    "domainJoinPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Password for the domain join account"
+      }
+    },
+    "ouPath": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional OU path for the computer object (e.g., OU=SQL Servers,OU=Lab Servers,DC=azlab,DC=local). Leave empty for default Computers container."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags"
+      }
+    }
+  },
+  "variables": {
+    "domainJoinOptions": 3
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Compute/virtualMachines/runCommands",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "asyncExecution": false,
+        "timeoutInSeconds": 600,
+        "source": {
+          "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+        },
+        "parameters": [
+          {
+            "name": "DomainName",
+            "value": "[parameters('domainName')]"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "publisher": "Microsoft.Compute",
+        "type": "JsonADDomainExtension",
+        "typeHandlerVersion": "1.3",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "Name": "[parameters('domainName')]",
+          "OUPath": "[parameters('ouPath')]",
+          "User": "[parameters('domainJoinUser')]",
+          "Restart": "true",
+          "Options": "[variables('domainJoinOptions')]"
+        },
+        "protectedSettings": {
+          "Password": "[parameters('domainJoinPassword')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+      ]
+    }
+  ],
+  "outputs": {
+    "extensionId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/JoinDomain', parameters('vmName')), '/')[0], split(format('{0}/JoinDomain', parameters('vmName')), '/')[1])]"
+    }
+  }
+}

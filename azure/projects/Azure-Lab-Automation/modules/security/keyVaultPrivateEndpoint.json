@@ -1,0 +1,141 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "1133838353233636274"
+    }
+  },
+  "parameters": {
+    "keyVaultId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the Key Vault"
+      }
+    },
+    "keyVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Key Vault (used for PE naming)"
+      }
+    },
+    "subnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet resource ID for the private endpoint"
+      }
+    },
+    "vnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "VNet resource ID to link the private DNS zone to"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags"
+      }
+    },
+    "existingPrivateDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone."
+      }
+    }
+  },
+  "variables": {
+    "privateDnsZoneName": "privatelink.vaultcore.azure.net",
+    "createDnsZone": "[empty(parameters('existingPrivateDnsZoneId'))]",
+    "effectiveDnsZoneId": "[if(variables('createDnsZone'), resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName')), parameters('existingPrivateDnsZoneId'))]"
+  },
+  "resources": [
+    {
+      "condition": "[variables('createDnsZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2024-06-01",
+      "name": "[variables('privateDnsZoneName')]",
+      "location": "global",
+      "tags": "[parameters('tags')]"
+    },
+    {
+      "condition": "[variables('createDnsZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', variables('privateDnsZoneName'), format('{0}-vnet-link', parameters('keyVaultName')))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-pe-vault', parameters('keyVaultName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('subnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[format('{0}-plsc-vault', parameters('keyVaultName'))]",
+            "properties": {
+              "privateLinkServiceId": "[parameters('keyVaultId')]",
+              "groupIds": [
+                "vault"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', format('{0}-pe-vault', parameters('keyVaultName')), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "privatelink-vault",
+            "properties": {
+              "privateDnsZoneId": "[variables('effectiveDnsZoneId')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]",
+        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-vault', parameters('keyVaultName')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "privateEndpointId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-vault', parameters('keyVaultName')))]"
+    },
+    "dnsZoneId": {
+      "type": "string",
+      "value": "[variables('effectiveDnsZoneId')]"
+    }
+  }
+}

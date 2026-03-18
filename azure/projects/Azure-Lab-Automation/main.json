@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.40.2.10011",
-      "templateHash": "13952445827181594061"
+      "version": "0.41.2.15936",
+      "templateHash": "11115198011713977804"
     }
   },
   "parameters": {
@@ -71,11 +71,62 @@
         "description": "Principal type for Key Vault RBAC assignment (User or Group)"
       }
     },
+    "enableEntraIntegration": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable Entra ID hybrid identity integration (Entra Connect Sync, Management VM with Entra ID login)"
+      }
+    },
+    "entraIdDomain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra ID tenant domain (e.g., usaavd.com). Required when enableEntraIntegration is true."
+      }
+    },
+    "domainStrategy": {
+      "type": "string",
+      "defaultValue": "subdomain",
+      "allowedValues": [
+        "subdomain",
+        "independent"
+      ],
+      "metadata": {
+        "description": "AD domain naming strategy: subdomain = AD domain is ad.{entraIdDomain}, independent = AD domain is separate with UPN suffix added"
+      }
+    },
+    "entraConnectPlacement": {
+      "type": "string",
+      "defaultValue": "dedicated",
+      "allowedValues": [
+        "dedicated",
+        "dc02"
+      ],
+      "metadata": {
+        "description": "Where to install Entra Connect: dedicated = new VM, dc02 = install on DC02"
+      }
+    },
+    "vmNameEntraConnect": {
+      "type": "string",
+      "defaultValue": "[format('{0}-entr', parameters('baseName'))]",
+      "maxLength": 15,
+      "metadata": {
+        "description": "VM name: Entra Connect Sync Server"
+      }
+    },
     "sizeDC": {
       "type": "string",
       "defaultValue": "Standard_D2s_v5",
       "metadata": {
         "description": "VM size for Domain Controllers"
+      }
+    },
+    "sizeManagement": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v5",
+      "metadata": {
+        "description": "VM size for Management and Entra Connect VMs"
       }
     },
     "sizeApp": {
@@ -104,6 +155,18 @@
       "defaultValue": "Standard_D8s_v5",
       "metadata": {
         "description": "VM size for AOAG SQL VMs (Site 2 — PrimC)"
+      }
+    },
+    "osDiskSku": {
+      "type": "string",
+      "defaultValue": "Premium_LRS",
+      "allowedValues": [
+        "Premium_LRS",
+        "StandardSSD_LRS",
+        "Standard_LRS"
+      ],
+      "metadata": {
+        "description": "OS disk storage type for all VMs"
       }
     },
     "vnetAddressPrefix": {
@@ -183,11 +246,32 @@
         "description": "Static IP for DC02"
       }
     },
+    "entraConnectIp": {
+      "type": "string",
+      "defaultValue": "10.0.1.6",
+      "metadata": {
+        "description": "Static IP for Entra Connect server"
+      }
+    },
     "aoagListenerIp": {
       "type": "string",
       "defaultValue": "10.0.40.10",
       "metadata": {
         "description": "AOAG Listener IP (ILB frontend) in Site 2 subnet"
+      }
+    },
+    "existingFileDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone)."
+      }
+    },
+    "existingKvDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the Key Vault PE skips DNS zone and VNet link creation to avoid conflicts."
       }
     },
     "colocateSql": {
@@ -322,7 +406,9 @@
     "dc01Name": "[format('{0}-dc01', parameters('baseName'))]",
     "dc02Name": "[format('{0}-dc02', parameters('baseName'))]",
     "effectiveAppSize": "[if(parameters('colocateSql'), parameters('sizeAppColocated'), parameters('sizeApp'))]",
-    "domainJoinUser": "[format('svc-domjoin@{0}', parameters('domainName'))]"
+    "domainJoinUser": "[format('svc-domjoin@{0}', parameters('domainName'))]",
+    "deployEntraConnectVm": "[and(parameters('enableEntraIntegration'), equals(parameters('entraConnectPlacement'), 'dedicated'))]",
+    "entraConnectTargetVm": "[if(equals(parameters('entraConnectPlacement'), 'dedicated'), parameters('vmNameEntraConnect'), variables('dc02Name'))]"
   },
   "resources": [
     {
@@ -363,6 +449,119 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
+      "name": "deploy-natgw",
+      "resourceGroup": "[variables('rgNetwork')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "natGatewayName": {
+            "value": "[format('{0}-natgw', parameters('baseName'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('workload', 'network'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "1209376897630896095"
+            }
+          },
+          "parameters": {
+            "natGatewayName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the NAT Gateway resource"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            },
+            "idleTimeoutMinutes": {
+              "type": "int",
+              "defaultValue": 4,
+              "minValue": 4,
+              "maxValue": 120,
+              "metadata": {
+                "description": "Idle timeout in minutes (4–120)"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-pip', parameters('natGatewayName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
+              "type": "Microsoft.Network/natGateways",
+              "apiVersion": "2023-11-01",
+              "name": "[parameters('natGatewayName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "idleTimeoutInMinutes": "[parameters('idleTimeoutMinutes')]",
+                "publicIpAddresses": [
+                  {
+                    "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('natGatewayName')))]"
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('natGatewayName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "natGatewayId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/natGateways', parameters('natGatewayName'))]"
+            },
+            "publicIpAddress": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip', parameters('natGatewayName'))), '2023-11-01').ipAddress]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNetwork'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
       "name": "deploy-vnet",
       "resourceGroup": "[variables('rgNetwork')]",
       "properties": {
@@ -398,6 +597,9 @@
           "snetGatewayPrefix": {
             "value": "[parameters('snetGatewayPrefix')]"
           },
+          "natGatewayId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-natgw'), '2025-04-01').outputs.natGatewayId.value]"
+          },
           "dnsServers": {
             "value": [
               "[parameters('dc01Ip')]",
@@ -414,8 +616,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "16218238371480398583"
+              "version": "0.41.2.15936",
+              "templateHash": "9733339086765552914"
             }
           },
           "parameters": {
@@ -487,11 +689,25 @@
                 "description": "Custom DNS server IP addresses for the VNet (e.g., DC static IPs). Leave empty to use Azure-provided DNS."
               }
             },
+            "snetPePrefix": {
+              "type": "string",
+              "defaultValue": "10.0.250.0/24",
+              "metadata": {
+                "description": "Private Endpoint subnet CIDR"
+              }
+            },
             "snetGatewayPrefix": {
               "type": "string",
               "defaultValue": "",
               "metadata": {
                 "description": "GatewaySubnet CIDR for VPN Gateway (/27 minimum). Leave empty to skip."
+              }
+            },
+            "natGatewayId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of the NAT Gateway for outbound internet. Leave empty to skip."
               }
             }
           },
@@ -509,7 +725,8 @@
                   "addressPrefix": "[parameters('snetAdPrefix')]",
                   "networkSecurityGroup": {
                     "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-ad', parameters('vnetName')))]"
-                  }
+                  },
+                  "natGateway": "[if(not(empty(parameters('natGatewayId'))), createObject('id', parameters('natGatewayId')), null())]"
                 }
               },
               {
@@ -518,7 +735,8 @@
                   "addressPrefix": "[parameters('snetMainPrefix')]",
                   "networkSecurityGroup": {
                     "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-main', parameters('vnetName')))]"
-                  }
+                  },
+                  "natGateway": "[if(not(empty(parameters('natGatewayId'))), createObject('id', parameters('natGatewayId')), null())]"
                 }
               },
               {
@@ -527,7 +745,8 @@
                   "addressPrefix": "[parameters('snetSite1Prefix')]",
                   "networkSecurityGroup": {
                     "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-site1', parameters('vnetName')))]"
-                  }
+                  },
+                  "natGateway": "[if(not(empty(parameters('natGatewayId'))), createObject('id', parameters('natGatewayId')), null())]"
                 }
               },
               {
@@ -536,7 +755,14 @@
                   "addressPrefix": "[parameters('snetSite2Prefix')]",
                   "networkSecurityGroup": {
                     "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg-site2', parameters('vnetName')))]"
-                  }
+                  },
+                  "natGateway": "[if(not(empty(parameters('natGatewayId'))), createObject('id', parameters('natGatewayId')), null())]"
+                }
+              },
+              {
+                "name": "snet-pe",
+                "properties": {
+                  "addressPrefix": "[parameters('snetPePrefix')]"
                 }
               }
             ],
@@ -834,14 +1060,19 @@
               "type": "string",
               "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), '2023-11-01').subnets[4].id]"
             },
+            "snetPeId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), '2023-11-01').subnets[5].id]"
+            },
             "snetGatewayId": {
               "type": "string",
-              "value": "[if(not(empty(parameters('snetGatewayPrefix'))), reference(resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), '2023-11-01').subnets[5].id, '')]"
+              "value": "[if(not(empty(parameters('snetGatewayPrefix'))), reference(resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), '2023-11-01').subnets[6].id, '')]"
             }
           }
         }
       },
       "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-natgw')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNetwork'))]"
       ]
     },
@@ -875,8 +1106,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "17096646037920580551"
+              "version": "0.41.2.15936",
+              "templateHash": "1251834858996191700"
             }
           },
           "parameters": {
@@ -1007,8 +1238,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "2244143306028648290"
+              "version": "0.41.2.15936",
+              "templateHash": "6995448948767322530"
             }
           },
           "parameters": {
@@ -1052,11 +1283,11 @@
             },
             "gatewaySku": {
               "type": "string",
-              "defaultValue": "VpnGw1",
+              "defaultValue": "VpnGw1AZ",
               "allowedValues": [
-                "VpnGw1",
-                "VpnGw2",
-                "VpnGw3"
+                "VpnGw1AZ",
+                "VpnGw2AZ",
+                "VpnGw3AZ"
               ],
               "metadata": {
                 "description": "VPN Gateway SKU"
@@ -1199,8 +1430,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "5951234751421256633"
+              "version": "0.41.2.15936",
+              "templateHash": "9618168942547393665"
             }
           },
           "parameters": {
@@ -1281,7 +1512,11 @@
                 "enableRbacAuthorization": true,
                 "enableSoftDelete": true,
                 "softDeleteRetentionInDays": 7,
-                "publicNetworkAccess": "Enabled"
+                "publicNetworkAccess": "Disabled",
+                "networkAcls": {
+                  "defaultAction": "Deny",
+                  "bypass": "AzureServices"
+                }
               }
             },
             {
@@ -1343,6 +1578,187 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
+      "name": "deploy-keyvault-pe",
+      "resourceGroup": "[variables('rgNetwork')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-keyvault'), '2025-04-01').outputs.keyVaultId.value]"
+          },
+          "keyVaultName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-keyvault'), '2025-04-01').outputs.keyVaultName.value]"
+          },
+          "subnetId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.snetPeId.value]"
+          },
+          "vnetId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.vnetId.value]"
+          },
+          "existingPrivateDnsZoneId": {
+            "value": "[parameters('existingKvDnsZoneId')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('workload', 'secrets'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "1133838353233636274"
+            }
+          },
+          "parameters": {
+            "keyVaultId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the Key Vault"
+              }
+            },
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Key Vault (used for PE naming)"
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet resource ID for the private endpoint"
+              }
+            },
+            "vnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "VNet resource ID to link the private DNS zone to"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            },
+            "existingPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone."
+              }
+            }
+          },
+          "variables": {
+            "privateDnsZoneName": "privatelink.vaultcore.azure.net",
+            "createDnsZone": "[empty(parameters('existingPrivateDnsZoneId'))]",
+            "effectiveDnsZoneId": "[if(variables('createDnsZone'), resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName')), parameters('existingPrivateDnsZoneId'))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('createDnsZone')]",
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2024-06-01",
+              "name": "[variables('privateDnsZoneName')]",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "condition": "[variables('createDnsZone')]",
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2024-06-01",
+              "name": "[format('{0}/{1}', variables('privateDnsZoneName'), format('{0}-vnet-link', parameters('keyVaultName')))]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "virtualNetwork": {
+                  "id": "[parameters('vnetId')]"
+                },
+                "registrationEnabled": false
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-pe-vault', parameters('keyVaultName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('subnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('{0}-plsc-vault', parameters('keyVaultName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('keyVaultId')]",
+                      "groupIds": [
+                        "vault"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/{1}', format('{0}-pe-vault', parameters('keyVaultName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "privatelink-vault",
+                    "properties": {
+                      "privateDnsZoneId": "[variables('effectiveDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-vault', parameters('keyVaultName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "privateEndpointId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-vault', parameters('keyVaultName')))]"
+            },
+            "dnsZoneId": {
+              "type": "string",
+              "value": "[variables('effectiveDnsZoneId')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-keyvault')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNetwork'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
       "name": "deploy-cloud-witness",
       "resourceGroup": "[variables('rgIdentity')]",
       "properties": {
@@ -1360,8 +1776,14 @@
           "skuName": {
             "value": "Standard_LRS"
           },
+          "shareName": {
+            "value": "witness"
+          },
+          "shareQuotaGiB": {
+            "value": 5
+          },
           "tags": {
-            "value": "[union(variables('commonTags'), createObject('workload', 'cloud-witness'))]"
+            "value": "[union(variables('commonTags'), createObject('workload', 'file-share-witness'))]"
           }
         },
         "template": {
@@ -1370,8 +1792,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "16592675981682427211"
+              "version": "0.41.2.15936",
+              "templateHash": "13559770146588580610"
             }
           },
           "parameters": {
@@ -1399,11 +1821,74 @@
                 "description": "Storage account SKU"
               }
             },
+            "shareName": {
+              "type": "string",
+              "defaultValue": "witness",
+              "metadata": {
+                "description": "Name of the Azure Files share"
+              }
+            },
+            "shareQuotaGiB": {
+              "type": "int",
+              "defaultValue": 5,
+              "metadata": {
+                "description": "Share quota in GiB"
+              }
+            },
             "tags": {
               "type": "object",
               "defaultValue": {},
               "metadata": {
                 "description": "Tags to apply"
+              }
+            },
+            "enableADDS": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Enable on-premises AD DS authentication for SMB file shares"
+              }
+            },
+            "adDomainName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD domain FQDN (e.g., azlab.local)"
+              }
+            },
+            "adNetBiosDomainName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD NetBIOS domain name (e.g., AZLAB)"
+              }
+            },
+            "adForestName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD forest name (e.g., azlab.local)"
+              }
+            },
+            "adDomainGuid": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD domain GUID"
+              }
+            },
+            "adDomainSid": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD domain SID (e.g., S-1-5-21-...)"
+              }
+            },
+            "adAzureStorageSid": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "SID of the computer account created in AD for this storage account"
               }
             }
           },
@@ -1426,8 +1911,36 @@
               "properties": {
                 "supportsHttpsTrafficOnly": true,
                 "minimumTlsVersion": "TLS1_2",
-                "allowBlobPublicAccess": false
+                "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": false,
+                "defaultToOAuthAuthentication": true,
+                "publicNetworkAccess": "Disabled",
+                "networkAcls": {
+                  "defaultAction": "Deny",
+                  "bypass": "AzureServices"
+                },
+                "azureFilesIdentityBasedAuthentication": "[if(parameters('enableADDS'), createObject('directoryServiceOptions', 'AD', 'activeDirectoryProperties', createObject('domainName', parameters('adDomainName'), 'netBiosDomainName', parameters('adNetBiosDomainName'), 'forestName', parameters('adForestName'), 'domainGuid', parameters('adDomainGuid'), 'domainSid', parameters('adDomainSid'), 'azureStorageSid', parameters('adAzureStorageSid')), 'defaultSharePermission', 'StorageFileDataSmbShareContributor'), null())]"
               }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', parameters('shareName'))]",
+              "properties": {
+                "shareQuota": "[parameters('shareQuotaGiB')]",
+                "enabledProtocols": "SMB"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', variables('storageAccountName'), 'default')]"
+              ]
             }
           ],
           "outputs": {
@@ -1438,12 +1951,197 @@
             "storageAccountId": {
               "type": "string",
               "value": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+            },
+            "fileShareName": {
+              "type": "string",
+              "value": "[parameters('shareName')]"
             }
           }
         }
       },
       "dependsOn": [
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgIdentity'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-cloud-witness-pe",
+      "resourceGroup": "[variables('rgNetwork')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.storageAccountId.value]"
+          },
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "subnetId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.snetPeId.value]"
+          },
+          "vnetId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.vnetId.value]"
+          },
+          "existingPrivateDnsZoneId": {
+            "value": "[parameters('existingFileDnsZoneId')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('workload', 'file-share-witness'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "9397334146870722503"
+            }
+          },
+          "parameters": {
+            "storageAccountId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the storage account"
+              }
+            },
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the storage account (used for PE naming)"
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet resource ID for the private endpoint"
+              }
+            },
+            "vnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "VNet resource ID to link the private DNS zone to"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            },
+            "existingPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of an existing privatelink.file DNS zone. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone."
+              }
+            }
+          },
+          "variables": {
+            "privateDnsZoneName": "[format('privatelink.file.{0}', environment().suffixes.storage)]",
+            "createDnsZone": "[empty(parameters('existingPrivateDnsZoneId'))]",
+            "effectiveDnsZoneId": "[if(variables('createDnsZone'), resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName')), parameters('existingPrivateDnsZoneId'))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('createDnsZone')]",
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2024-06-01",
+              "name": "[variables('privateDnsZoneName')]",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "condition": "[variables('createDnsZone')]",
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2024-06-01",
+              "name": "[format('{0}/{1}', variables('privateDnsZoneName'), format('{0}-vnet-link', parameters('storageAccountName')))]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "virtualNetwork": {
+                  "id": "[parameters('vnetId')]"
+                },
+                "registrationEnabled": false
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-pe-file', parameters('storageAccountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('subnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('{0}-plsc-file', parameters('storageAccountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "file"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/{1}', format('{0}-pe-file', parameters('storageAccountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "privatelink-file",
+                    "properties": {
+                      "privateDnsZoneId": "[variables('effectiveDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "privateEndpointId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName')))]"
+            },
+            "dnsZoneId": {
+              "type": "string",
+              "value": "[variables('effectiveDnsZoneId')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNetwork'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
       ]
     },
     {
@@ -1487,6 +2185,9 @@
           "privateIpAddress": {
             "value": "[parameters('dc01Ip')]"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller'))]"
           }
@@ -1497,8 +2198,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -1602,6 +2303,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -1632,9 +2345,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -1669,6 +2382,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -1699,7 +2432,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -1720,6 +2453,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -1790,6 +2524,9 @@
           "privateIpAddress": {
             "value": "[parameters('dc02Ip')]"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller'))]"
           }
@@ -1800,8 +2537,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -1905,6 +2642,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -1935,9 +2684,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -1972,6 +2721,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -2002,7 +2771,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -2023,6 +2792,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -2088,8 +2858,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "16345238792777154824"
+              "version": "0.41.2.15936",
+              "templateHash": "476956455133675823"
             }
           },
           "parameters": {
@@ -2147,7 +2917,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\PromoteDC1.log -Append; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools -IncludeAllSubFeature; $pw = ConvertTo-SecureString {0}{1}{2} -AsPlainText -Force; Install-ADDSForest -DomainName {3}{4}{5} -DomainNetbiosName {6}{7}{8} -SafeModeAdministratorPassword $pw -InstallDns:$true -CreateDnsDelegation:$false -DatabasePath {9}C:\\Windows\\NTDS{10} -LogPath {11}C:\\Windows\\NTDS{12} -SysvolPath {13}C:\\Windows\\SYSVOL{14} -NoRebootOnCompletion:$false -Force:$true; Stop-Transcript\"', variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), parameters('netbiosName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\PromoteDC1.log -Append; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools -IncludeAllSubFeature; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {0}Already a domain controller -- skipping forest promotion{1} }} else {{ $pw = ConvertTo-SecureString {2}{3}{4} -AsPlainText -Force; Install-ADDSForest -DomainName {5}{6}{7} -DomainNetbiosName {8}{9}{10} -SafeModeAdministratorPassword $pw -InstallDns:$true -CreateDnsDelegation:$false -DatabasePath {11}C:\\Windows\\NTDS{12} -LogPath {13}C:\\Windows\\NTDS{14} -SysvolPath {15}C:\\Windows\\SYSVOL{16} -NoRebootOnCompletion:$false -Force:$true }}; Stop-Transcript\"', variables('q'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), parameters('netbiosName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
             }
@@ -2188,6 +2958,12 @@
           "svcAccountPassword": {
             "value": "[parameters('adminPassword')]"
           },
+          "entraIdDomain": {
+            "value": "[parameters('entraIdDomain')]"
+          },
+          "domainStrategy": {
+            "value": "[parameters('domainStrategy')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller'))]"
           }
@@ -2198,8 +2974,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "5754894271378730022"
+              "version": "0.41.2.15936",
+              "templateHash": "728075895935753196"
             }
           },
           "parameters": {
@@ -2227,6 +3003,20 @@
                 "description": "Password for service accounts"
               }
             },
+            "entraIdDomain": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Entra ID tenant domain for UPN suffix (empty to skip)"
+              }
+            },
+            "domainStrategy": {
+              "type": "string",
+              "defaultValue": "subdomain",
+              "metadata": {
+                "description": "Domain strategy: subdomain or independent"
+              }
+            },
             "tags": {
               "type": "object",
               "defaultValue": {},
@@ -2236,7 +3026,7 @@
             }
           },
           "variables": {
-            "$fxv#0": "<#\r\n.SYNOPSIS\r\n    Configure Active Directory — OUs, Security Groups, Service Accounts, gMSA\r\n    Runs as a VM RunCommand on the first domain controller after forest promotion.\r\n\r\n.PARAMETER DomainName\r\n    Fully qualified domain name (e.g., azlab.local)\r\n\r\n.PARAMETER SvcPassword\r\n    Password for service accounts (passed as protectedParameter)\r\n#>\r\nparam(\r\n    [Parameter(Mandatory)]\r\n    [string]$DomainName,\r\n\r\n    [Parameter(Mandatory)]\r\n    [string]$SvcPassword\r\n)\r\n\r\n$ErrorActionPreference = 'Stop'\r\nStart-Transcript -Path \"C:\\WindowsTemp\\ConfigureAD.log\" -Append\r\n\r\n# ============================================================================\r\n# Wait for AD DS to be fully operational after DC promotion reboot\r\n# ============================================================================\r\nWrite-Output \"Waiting for Active Directory to become available...\"\r\n$maxWait = 600\r\n$waited = 0\r\nwhile ($waited -lt $maxWait) {\r\n    try {\r\n        Get-ADDomain -ErrorAction Stop | Out-Null\r\n        Write-Output \"  AD DS is ready (waited ${waited}s)\"\r\n        break\r\n    } catch {\r\n        Start-Sleep -Seconds 15\r\n        $waited += 15\r\n    }\r\n}\r\nif ($waited -ge $maxWait) { throw \"AD DS did not become ready within $maxWait seconds\" }\r\n\r\nImport-Module ActiveDirectory\r\n\r\n$svcSecure = ConvertTo-SecureString $SvcPassword -AsPlainText -Force\r\n$domainDN = ($DomainName -split '\\.' | ForEach-Object { \"DC=$_\" }) -join ','\r\n\r\n# ============================================================================\r\n# Configure DNS Forwarder — Azure internal DNS (168.63.129.16)\r\n# ============================================================================\r\n# The DC's DNS server is authoritative for the AD zone only.  Without a\r\n# forwarder, VMs using the DC as their DNS server cannot resolve public names\r\n# (e.g., *.file.core.windows.net, *.blob.core.windows.net, Windows Update).\r\n# Azure's wireserver DNS (168.63.129.16) resolves all public + Azure private\r\n# DNS names and is reachable from every Azure VM.\r\n# ============================================================================\r\nWrite-Output \"Configuring DNS forwarder to Azure DNS (168.63.129.16)...\"\r\ntry {\r\n    $existing = (Get-DnsServerForwarder).IPAddress.IPAddressToString\r\n    if ($existing -notcontains '168.63.129.16') {\r\n        Add-DnsServerForwarder -IPAddress '168.63.129.16' -PassThru | Out-Null\r\n        Write-Output \"  DNS forwarder added: 168.63.129.16\"\r\n    } else {\r\n        Write-Output \"  DNS forwarder already configured: 168.63.129.16\"\r\n    }\r\n} catch {\r\n    Write-Output \"  WARNING: Failed to configure DNS forwarder (non-fatal): $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Create OU Structure\r\n# ============================================================================\r\nWrite-Output \"Creating OU structure...\"\r\n$ous = @(\r\n    @{ Name = 'Lab Accounts';       Parent = $domainDN }\r\n    @{ Name = 'Service Accounts';   Parent = \"OU=Lab Accounts,$domainDN\" }\r\n    @{ Name = 'Admins';             Parent = \"OU=Lab Accounts,$domainDN\" }\r\n    @{ Name = 'Lab Groups';         Parent = $domainDN }\r\n    @{ Name = 'Lab Servers';        Parent = $domainDN }\r\n    @{ Name = 'SQL Servers';        Parent = \"OU=Lab Servers,$domainDN\" }\r\n    @{ Name = 'App Servers';        Parent = \"OU=Lab Servers,$domainDN\" }\r\n)\r\nforeach ($ou in $ous) {\r\n    $ouDN = \"OU=$($ou.Name),$($ou.Parent)\"\r\n    if (-not (Get-ADOrganizationalUnit -Filter \"DistinguishedName -eq '$ouDN'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADOrganizationalUnit -Name $ou.Name -Path $ou.Parent -ProtectedFromAccidentalDeletion $false\r\n        Write-Output \"  Created OU: $ouDN\"\r\n    } else {\r\n        Write-Output \"  OU already exists: $ouDN\"\r\n    }\r\n}\r\n\r\n# ============================================================================\r\n# Create Security Groups\r\n# ============================================================================\r\nWrite-Output \"Creating security groups...\"\r\n$groupOU = \"OU=Lab Groups,$domainDN\"\r\n$groups = @(\r\n    @{ Name = 'GRP-DomainAdmins-Lab'; Description = 'Lab domain administrators (manually populated)' }\r\n    @{ Name = 'GRP-SQLAdmins';        Description = 'SQL Server administrators' }\r\n    @{ Name = 'GRP-AppAdmins';        Description = 'Application server administrators' }\r\n    @{ Name = 'GRP-MCMAdmins';        Description = 'MCM server administrators' }\r\n    @{ Name = 'GRP-ServerAdmins';     Description = 'General server local administrators' }\r\n    @{ Name = 'GRP-DomainJoin';       Description = 'Accounts permitted to domain-join machines' }\r\n)\r\nforeach ($g in $groups) {\r\n    if (-not (Get-ADGroup -Filter \"Name -eq '$($g.Name)'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADGroup -Name $g.Name -GroupScope Global -GroupCategory Security `\r\n            -Path $groupOU -Description $g.Description\r\n        Write-Output \"  Created group: $($g.Name)\"\r\n    } else {\r\n        Write-Output \"  Group already exists: $($g.Name)\"\r\n    }\r\n}\r\n\r\n# Add GRP-DomainAdmins-Lab to Domain Admins for elevated lab access\r\nAdd-ADGroupMember -Identity 'Domain Admins' -Members 'GRP-DomainAdmins-Lab' -ErrorAction SilentlyContinue\r\nWrite-Output \"  Added GRP-DomainAdmins-Lab to Domain Admins\"\r\n\r\n# ============================================================================\r\n# Create Service Accounts\r\n# ============================================================================\r\nWrite-Output \"Creating service accounts...\"\r\n$svcOU = \"OU=Service Accounts,OU=Lab Accounts,$domainDN\"\r\n$svcAccounts = @(\r\n    @{ Name = 'svc-domjoin';   Desc = 'Domain Join service account';    Groups = @('GRP-DomainJoin') }\r\n    @{ Name = 'svc-appadmin'; Desc = 'Application Admin service account'; Groups = @('GRP-AppAdmins') }\r\n    @{ Name = 'svc-sqlsvc';    Desc = 'SQL Server service account';     Groups = @('GRP-SQLAdmins') }\r\n    @{ Name = 'svc-sqlagent';  Desc = 'SQL Agent service account';      Groups = @('GRP-SQLAdmins') }\r\n    @{ Name = 'svc-appnaa';   Desc = 'Application Network Access Account';     Groups = @('GRP-AppAdmins') }\r\n)\r\n\r\n# --- Admin accounts (placed in OU=Admins,OU=Lab Accounts) --------------------\r\n$adminOU = \"OU=Admins,OU=Lab Accounts,$domainDN\"\r\n$adminAccounts = @(\r\n    @{ Name = 'mcm-admin';  Desc = 'MCM Administrator account'; Groups = @('GRP-AppAdmins', 'GRP-MCMAdmins') }\r\n    @{ Name = 'sql-admin';  Desc = 'SQL Administrator account';  Groups = @('GRP-SQLAdmins') }\r\n)\r\nforeach ($svc in $svcAccounts) {\r\n    if (-not (Get-ADUser -Filter \"SamAccountName -eq '$($svc.Name)'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADUser -Name $svc.Name `\r\n            -SamAccountName $svc.Name `\r\n            -UserPrincipalName \"$($svc.Name)@$DomainName\" `\r\n            -Path $svcOU `\r\n            -Description $svc.Desc `\r\n            -AccountPassword $svcSecure `\r\n            -PasswordNeverExpires $true `\r\n            -CannotChangePassword $true `\r\n            -Enabled $true\r\n        Write-Output \"  Created user: $($svc.Name)\"\r\n    } else {\r\n        Write-Output \"  User already exists: $($svc.Name)\"\r\n        # Always sync password so domain-join credentials stay consistent\r\n        Set-ADAccountPassword -Identity $svc.Name -Reset -NewPassword $svcSecure\r\n        Write-Output \"  Password synchronized for: $($svc.Name)\"\r\n    }\r\n    # Add to groups\r\n    foreach ($grp in $svc.Groups) {\r\n        Add-ADGroupMember -Identity $grp -Members $svc.Name -ErrorAction SilentlyContinue\r\n    }\r\n}\r\n\r\n# --- Create admin accounts in the Admins OU -----------------------------------\r\nWrite-Output \"Creating admin accounts...\"\r\nforeach ($adm in $adminAccounts) {\r\n    if (-not (Get-ADUser -Filter \"SamAccountName -eq '$($adm.Name)'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADUser -Name $adm.Name `\r\n            -SamAccountName $adm.Name `\r\n            -UserPrincipalName \"$($adm.Name)@$DomainName\" `\r\n            -Path $adminOU `\r\n            -Description $adm.Desc `\r\n            -AccountPassword $svcSecure `\r\n            -PasswordNeverExpires $true `\r\n            -CannotChangePassword $true `\r\n            -Enabled $true\r\n        Write-Output \"  Created admin: $($adm.Name)\"\r\n    } else {\r\n        Write-Output \"  Admin already exists: $($adm.Name)\"\r\n        Set-ADAccountPassword -Identity $adm.Name -Reset -NewPassword $svcSecure\r\n        Write-Output \"  Password synchronized for: $($adm.Name)\"\r\n    }\r\n    foreach ($grp in $adm.Groups) {\r\n        Add-ADGroupMember -Identity $grp -Members $adm.Name -ErrorAction SilentlyContinue\r\n    }\r\n}\r\n\r\n# ============================================================================\r\n# Delegate Domain-Join Permissions to svc-domjoin\r\n# ============================================================================\r\nWrite-Output \"Delegating domain-join permissions to svc-domjoin...\"\r\ntry {\r\n    $domJoinUser = Get-ADUser -Identity 'svc-domjoin'\r\n    $computersDN = \"CN=Computers,$domainDN\"\r\n    $acl = Get-Acl \"AD:\\$computersDN\"\r\n\r\n    $guidComputer  = [guid]'bf967a86-0de6-11d0-a285-00aa003049e2'  # Computer object class\r\n    $guidNull      = [guid]'00000000-0000-0000-0000-000000000000'\r\n    $sid = New-Object System.Security.Principal.SecurityIdentifier($domJoinUser.SID)\r\n\r\n    # Allow creating Computer objects\r\n    $ace1 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(\r\n        $sid, 'CreateChild', 'Allow', $guidComputer, 'All'\r\n    )\r\n    # Allow writing all properties on Computer objects\r\n    $ace2 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(\r\n        $sid, 'WriteProperty', 'Allow', $guidNull, 'Descendents', $guidComputer\r\n    )\r\n    $acl.AddAccessRule($ace1)\r\n    $acl.AddAccessRule($ace2)\r\n    Set-Acl \"AD:\\$computersDN\" $acl\r\n    Write-Output \"  Domain-join delegation configured\"\r\n} catch {\r\n    Write-Output \"  WARNING: Domain-join delegation failed (non-fatal): $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Create Group Managed Service Account (gMSA) for SQL Server\r\n# ============================================================================\r\nWrite-Output \"Creating gMSA: gmsa-sqlsvc...\"\r\ntry {\r\n    # Create KDS Root Key — use EffectiveTime in the past for lab (immediate effect)\r\n    if (-not (Get-KdsRootKey -ErrorAction SilentlyContinue)) {\r\n        Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))\r\n        Write-Output \"  Created KDS Root Key (effective immediately for lab)\"\r\n        Start-Sleep -Seconds 10  # Brief wait for replication\r\n    }\r\n\r\n    if (-not (Get-ADServiceAccount -Filter \"Name -eq 'gmsa-sqlsvc'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADServiceAccount -Name 'gmsa-sqlsvc' `\r\n            -DNSHostName \"gmsa-sqlsvc.$DomainName\" `\r\n            -Description 'Group Managed Service Account for SQL Server' `\r\n            -KerberosEncryptionType AES128, AES256 `\r\n            -ManagedPasswordIntervalInDays 30 `\r\n            -PrincipalsAllowedToRetrieveManagedPassword 'GRP-SQLAdmins'\r\n        Write-Output \"  Created gMSA: gmsa-sqlsvc\"\r\n    } else {\r\n        Write-Output \"  gMSA already exists: gmsa-sqlsvc\"\r\n    }\r\n    Write-Output \"  NOTE: After SQL servers join the domain, add their computer accounts:\"\r\n    Write-Output \"    Set-ADServiceAccount gmsa-sqlsvc -PrincipalsAllowedToRetrieveManagedPassword @{Add='YOURPC$'}\"\r\n} catch {\r\n    Write-Output \"  WARNING: gMSA creation failed (non-fatal): $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Summary\r\n# ============================================================================\r\nWrite-Output \"\"\r\nWrite-Output \"==========================================\"\r\nWrite-Output \" AD Configuration Complete\"\r\nWrite-Output \"==========================================\"\r\nWrite-Output \" Domain:    $DomainName\"\r\nWrite-Output \" Domain DN: $domainDN\"\r\nWrite-Output \" OUs:       Lab Accounts, Service Accounts, Admins, Lab Groups, Lab Servers, SQL Servers, App Servers\"\r\nWrite-Output \" Groups:    GRP-DomainAdmins-Lab (manual), GRP-SQLAdmins, GRP-AppAdmins, GRP-MCMAdmins, GRP-ServerAdmins, GRP-DomainJoin\"\r\nWrite-Output \" Accounts:  svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa\"\r\nWrite-Output \" Admins:    mcm-admin, sql-admin\"\r\nWrite-Output \" gMSA:      gmsa-sqlsvc\"\r\nWrite-Output \" DNS Fwd:   168.63.129.16 (Azure internal DNS)\"\r\nWrite-Output \"==========================================\"\r\n\r\nStop-Transcript\r\n"
+            "$fxv#0": "<#\r\n.SYNOPSIS\r\n    Configure Active Directory -- OUs, Security Groups, Service Accounts, gMSA\r\n    Runs as a VM RunCommand on the first domain controller after forest promotion.\r\n\r\n.PARAMETER DomainName\r\n    Fully qualified domain name (e.g., azlab.local)\r\n\r\n.PARAMETER SvcPassword\r\n    Password for service accounts (passed as protectedParameter)\r\n\r\n.PARAMETER EntraIdDomain\r\n    Entra ID tenant domain (e.g., usaavd.com). When specified with\r\n    DomainStrategy='independent', this is added as a UPN suffix to the AD forest.\r\n\r\n.PARAMETER DomainStrategy\r\n    'subdomain' = AD domain is a subdomain of EntraIdDomain (UPNs already match)\r\n    'independent' = AD domain is separate; EntraIdDomain added as UPN suffix\r\n#>\r\nparam(\r\n    [Parameter(Mandatory)]\r\n    [string]$DomainName,\r\n\r\n    [Parameter(Mandatory)]\r\n    [string]$SvcPassword,\r\n\r\n    [Parameter()]\r\n    [string]$EntraIdDomain = '',\r\n\r\n    [Parameter()]\r\n    [string]$DomainStrategy = 'subdomain'\r\n)\r\n\r\n$ErrorActionPreference = 'Stop'\r\nStart-Transcript -Path \"C:\\WindowsTemp\\ConfigureAD.log\" -Append\r\n\r\n# ============================================================================\r\n# Wait for AD DS to be fully operational after DC promotion reboot\r\n# ============================================================================\r\nWrite-Output \"Waiting for Active Directory to become available...\"\r\n$maxWait = 600\r\n$waited = 0\r\nwhile ($waited -lt $maxWait) {\r\n    try {\r\n        Get-ADDomain -ErrorAction Stop | Out-Null\r\n        Write-Output \"  AD DS is ready (waited ${waited}s)\"\r\n        break\r\n    } catch {\r\n        Start-Sleep -Seconds 15\r\n        $waited += 15\r\n    }\r\n}\r\nif ($waited -ge $maxWait) { throw \"AD DS did not become ready within $maxWait seconds\" }\r\n\r\nImport-Module ActiveDirectory\r\n\r\n$svcSecure = ConvertTo-SecureString $SvcPassword -AsPlainText -Force\r\n$domainDN = ($DomainName -split '\\.' | ForEach-Object { \"DC=$_\" }) -join ','\r\n\r\n# ============================================================================\r\n# Configure DNS Forwarder -- Azure internal DNS (168.63.129.16)\r\n# ============================================================================\r\n# The DC's DNS server is authoritative for the AD zone only.  Without a\r\n# forwarder, VMs using the DC as their DNS server cannot resolve public names\r\n# (e.g., *.file.core.windows.net, *.blob.core.windows.net, Windows Update).\r\n# Azure's wireserver DNS (168.63.129.16) resolves all public + Azure private\r\n# DNS names and is reachable from every Azure VM.\r\n# ============================================================================\r\nWrite-Output \"Configuring DNS forwarder to Azure DNS (168.63.129.16) on ALL domain controllers...\"\r\ntry {\r\n    $allDCs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName\r\n    foreach ($dc in $allDCs) {\r\n        try {\r\n            # Use Set (not Add) to ensure 168.63.129.16 is the ONLY forwarder.\r\n            # Add-DnsServerForwarder can leave stale entries (e.g., other DC IPs)\r\n            # which cause forwarding loops or bypass Azure Private DNS zones.\r\n            Set-DnsServerForwarder -ComputerName $dc -IPAddress '168.63.129.16'\r\n            Write-Output \"  DNS forwarder set on ${dc}: 168.63.129.16\"\r\n        } catch {\r\n            Write-Output \"  WARNING: Failed to configure DNS forwarder on ${dc} (non-fatal): $_\"\r\n        }\r\n    }\r\n} catch {\r\n    Write-Output \"  WARNING: Failed to enumerate domain controllers (non-fatal): $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Add Entra ID UPN Suffix (independent domain strategy only)\r\n# ============================================================================\r\nif (-not [string]::IsNullOrWhiteSpace($EntraIdDomain) -and $DomainStrategy -eq 'independent') {\r\n    Write-Output \"Adding Entra ID UPN suffix: $EntraIdDomain...\"\r\n    try {\r\n        $forest = Get-ADForest\r\n        if ($forest.UPNSuffixes -notcontains $EntraIdDomain) {\r\n            Set-ADForest -Identity $forest.Name -UPNSuffixes @{Add=$EntraIdDomain}\r\n            Write-Output \"  UPN suffix added: $EntraIdDomain\"\r\n        } else {\r\n            Write-Output \"  UPN suffix already exists: $EntraIdDomain\"\r\n        }\r\n    } catch {\r\n        Write-Output \"  WARNING: Failed to add UPN suffix (non-fatal): $_\"\r\n    }\r\n} elseif (-not [string]::IsNullOrWhiteSpace($EntraIdDomain)) {\r\n    Write-Output \"Skipping UPN suffix -- domain strategy is '$DomainStrategy' (subdomain UPNs match Entra ID)\"\r\n}\r\n\r\n# ============================================================================\r\n# Create OU Structure\r\n# ============================================================================\r\nWrite-Output \"Creating OU structure...\"\r\n$ous = @(\r\n    @{ Name = 'Lab Accounts';       Parent = $domainDN }\r\n    @{ Name = 'Service Accounts';   Parent = \"OU=Lab Accounts,$domainDN\" }\r\n    @{ Name = 'Admins';             Parent = \"OU=Lab Accounts,$domainDN\" }\r\n    @{ Name = 'Lab Groups';         Parent = $domainDN }\r\n    @{ Name = 'Lab Servers';        Parent = $domainDN }\r\n    @{ Name = 'SQL Servers';        Parent = \"OU=Lab Servers,$domainDN\" }\r\n    @{ Name = 'App Servers';        Parent = \"OU=Lab Servers,$domainDN\" }\r\n    @{ Name = 'Storage Accounts';   Parent = \"OU=Lab Servers,$domainDN\" }\r\n)\r\nforeach ($ou in $ous) {\r\n    $ouDN = \"OU=$($ou.Name),$($ou.Parent)\"\r\n    if (-not (Get-ADOrganizationalUnit -Filter \"DistinguishedName -eq '$ouDN'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADOrganizationalUnit -Name $ou.Name -Path $ou.Parent -ProtectedFromAccidentalDeletion $false\r\n        Write-Output \"  Created OU: $ouDN\"\r\n    } else {\r\n        Write-Output \"  OU already exists: $ouDN\"\r\n    }\r\n}\r\n\r\n# ============================================================================\r\n# Create Security Groups\r\n# ============================================================================\r\nWrite-Output \"Creating security groups...\"\r\n$groupOU = \"OU=Lab Groups,$domainDN\"\r\n$groups = @(\r\n    @{ Name = 'GRP-DomainAdmins-Lab'; Description = 'Lab domain administrators (manually populated)' }\r\n    @{ Name = 'GRP-SQLAdmins';        Description = 'SQL Server administrators' }\r\n    @{ Name = 'GRP-AppAdmins';        Description = 'Application server administrators' }\r\n    @{ Name = 'GRP-MCMAdmins';        Description = 'MCM server administrators' }\r\n    @{ Name = 'GRP-ServerAdmins';     Description = 'General server local administrators' }\r\n    @{ Name = 'GRP-DomainJoin';       Description = 'Accounts permitted to domain-join machines' }\r\n)\r\nforeach ($g in $groups) {\r\n    if (-not (Get-ADGroup -Filter \"Name -eq '$($g.Name)'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADGroup -Name $g.Name -GroupScope Global -GroupCategory Security `\r\n            -Path $groupOU -Description $g.Description\r\n        Write-Output \"  Created group: $($g.Name)\"\r\n    } else {\r\n        Write-Output \"  Group already exists: $($g.Name)\"\r\n    }\r\n}\r\n\r\n# Add GRP-DomainAdmins-Lab to Domain Admins for elevated lab access\r\nAdd-ADGroupMember -Identity 'Domain Admins' -Members 'GRP-DomainAdmins-Lab' -ErrorAction SilentlyContinue\r\nWrite-Output \"  Added GRP-DomainAdmins-Lab to Domain Admins\"\r\n\r\n# ============================================================================\r\n# Create Service Accounts\r\n# ============================================================================\r\nWrite-Output \"Creating service accounts...\"\r\n$svcOU = \"OU=Service Accounts,OU=Lab Accounts,$domainDN\"\r\n$svcAccounts = @(\r\n    @{ Name = 'svc-domjoin';   Desc = 'Domain Join service account';    Groups = @('GRP-DomainJoin') }\r\n    @{ Name = 'svc-appadmin'; Desc = 'Application Admin service account'; Groups = @('GRP-AppAdmins') }\r\n    @{ Name = 'svc-sqlsvc';    Desc = 'SQL Server service account';     Groups = @('GRP-SQLAdmins') }\r\n    @{ Name = 'svc-sqlagent';  Desc = 'SQL Agent service account';      Groups = @('GRP-SQLAdmins') }\r\n    @{ Name = 'svc-appnaa';   Desc = 'Application Network Access Account';     Groups = @('GRP-AppAdmins') }\r\n)\r\n\r\n# --- Admin accounts (placed in OU=Admins,OU=Lab Accounts) --------------------\r\n$adminOU = \"OU=Admins,OU=Lab Accounts,$domainDN\"\r\n$adminAccounts = @(\r\n    @{ Name = 'lab-admin';  Desc = 'Lab infrastructure admin (delegated OU management)'; Groups = @('GRP-ServerAdmins', 'GRP-SQLAdmins', 'GRP-AppAdmins', 'GRP-MCMAdmins') }\r\n    @{ Name = 'mcm-admin';  Desc = 'MCM Administrator account'; Groups = @('GRP-AppAdmins', 'GRP-MCMAdmins') }\r\n    @{ Name = 'sql-admin';  Desc = 'SQL Administrator account';  Groups = @('GRP-SQLAdmins') }\r\n)\r\nforeach ($svc in $svcAccounts) {\r\n    if (-not (Get-ADUser -Filter \"SamAccountName -eq '$($svc.Name)'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADUser -Name $svc.Name `\r\n            -SamAccountName $svc.Name `\r\n            -UserPrincipalName \"$($svc.Name)@$DomainName\" `\r\n            -Path $svcOU `\r\n            -Description $svc.Desc `\r\n            -AccountPassword $svcSecure `\r\n            -PasswordNeverExpires $true `\r\n            -CannotChangePassword $true `\r\n            -Enabled $true\r\n        Write-Output \"  Created user: $($svc.Name)\"\r\n    } else {\r\n        Write-Output \"  User already exists: $($svc.Name)\"\r\n        # Always sync password so domain-join credentials stay consistent\r\n        Set-ADAccountPassword -Identity $svc.Name -Reset -NewPassword $svcSecure\r\n        Write-Output \"  Password synchronized for: $($svc.Name)\"\r\n    }\r\n    # Add to groups\r\n    foreach ($grp in $svc.Groups) {\r\n        Add-ADGroupMember -Identity $grp -Members $svc.Name -ErrorAction SilentlyContinue\r\n    }\r\n}\r\n\r\n# --- Create admin accounts in the Admins OU -----------------------------------\r\nWrite-Output \"Creating admin accounts...\"\r\nforeach ($adm in $adminAccounts) {\r\n    if (-not (Get-ADUser -Filter \"SamAccountName -eq '$($adm.Name)'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADUser -Name $adm.Name `\r\n            -SamAccountName $adm.Name `\r\n            -UserPrincipalName \"$($adm.Name)@$DomainName\" `\r\n            -Path $adminOU `\r\n            -Description $adm.Desc `\r\n            -AccountPassword $svcSecure `\r\n            -PasswordNeverExpires $true `\r\n            -CannotChangePassword $true `\r\n            -Enabled $true\r\n        Write-Output \"  Created admin: $($adm.Name)\"\r\n    } else {\r\n        Write-Output \"  Admin already exists: $($adm.Name)\"\r\n        Set-ADAccountPassword -Identity $adm.Name -Reset -NewPassword $svcSecure\r\n        Write-Output \"  Password synchronized for: $($adm.Name)\"\r\n    }\r\n    foreach ($grp in $adm.Groups) {\r\n        Add-ADGroupMember -Identity $grp -Members $adm.Name -ErrorAction SilentlyContinue\r\n    }\r\n}\r\n\r\n# ============================================================================\r\n# Delegate Domain-Join Permissions to svc-domjoin\r\n# ============================================================================\r\nWrite-Output \"Delegating domain-join permissions to svc-domjoin...\"\r\ntry {\r\n    $domJoinUser = Get-ADUser -Identity 'svc-domjoin'\r\n    $computersDN = \"CN=Computers,$domainDN\"\r\n    $acl = Get-Acl \"AD:\\$computersDN\"\r\n\r\n    $guidComputer  = [guid]'bf967a86-0de6-11d0-a285-00aa003049e2'  # Computer object class\r\n    $guidNull      = [guid]'00000000-0000-0000-0000-000000000000'\r\n    $sid = New-Object System.Security.Principal.SecurityIdentifier($domJoinUser.SID)\r\n\r\n    # Allow creating Computer objects\r\n    $ace1 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(\r\n        $sid, 'CreateChild', 'Allow', $guidComputer, 'All'\r\n    )\r\n    # Allow writing all properties on Computer objects\r\n    $ace2 = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(\r\n        $sid, 'WriteProperty', 'Allow', $guidNull, 'Descendents', $guidComputer\r\n    )\r\n    $acl.AddAccessRule($ace1)\r\n    $acl.AddAccessRule($ace2)\r\n    Set-Acl \"AD:\\$computersDN\" $acl\r\n    Write-Output \"  Domain-join delegation configured\"\r\n} catch {\r\n    Write-Output \"  WARNING: Domain-join delegation failed (non-fatal): $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Delegate OU Management to lab-admin\r\n# ============================================================================\r\n# lab-admin gets GenericAll (full control) over the Lab OUs so it can manage\r\n# users, groups, computers, and child OUs without being a Domain Admin.\r\nWrite-Output \"Delegating OU management to lab-admin...\"\r\ntry {\r\n    $labAdminUser = Get-ADUser -Identity 'lab-admin'\r\n    $labAdminSid = New-Object System.Security.Principal.SecurityIdentifier($labAdminUser.SID)\r\n    $guidNull = [guid]'00000000-0000-0000-0000-000000000000'\r\n\r\n    $delegateOUs = @(\r\n        \"OU=Lab Servers,$domainDN\"\r\n        \"OU=Lab Accounts,$domainDN\"\r\n        \"OU=Lab Groups,$domainDN\"\r\n    )\r\n    foreach ($ouDN in $delegateOUs) {\r\n        $acl = Get-Acl \"AD:\\$ouDN\"\r\n        $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(\r\n            $labAdminSid, 'GenericAll', 'Allow', 'Descendents', $guidNull\r\n        )\r\n        $acl.AddAccessRule($ace)\r\n        Set-Acl \"AD:\\$ouDN\" $acl\r\n        Write-Output \"  Delegated full control on: $ouDN\"\r\n    }\r\n\r\n    # Also grant lab-admin local admin on domain-joined servers via\r\n    # membership in GRP-ServerAdmins (GPO or restricted groups expected\r\n    # to map GRP-ServerAdmins to the local Administrators group).\r\n    Write-Output \"  lab-admin delegated over Lab Servers, Lab Accounts, Lab Groups\"\r\n} catch {\r\n    Write-Output \"  WARNING: lab-admin OU delegation failed (non-fatal): $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Create Group Managed Service Account (gMSA) for SQL Server\r\n# ============================================================================\r\nWrite-Output \"Creating gMSA: gmsa-sqlsvc...\"\r\ntry {\r\n    # Create KDS Root Key -- use EffectiveTime in the past for lab (immediate effect)\r\n    if (-not (Get-KdsRootKey -ErrorAction SilentlyContinue)) {\r\n        Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))\r\n        Write-Output \"  Created KDS Root Key (effective immediately for lab)\"\r\n        Start-Sleep -Seconds 10  # Brief wait for replication\r\n    }\r\n\r\n    if (-not (Get-ADServiceAccount -Filter \"Name -eq 'gmsa-sqlsvc'\" -ErrorAction SilentlyContinue)) {\r\n        New-ADServiceAccount -Name 'gmsa-sqlsvc' `\r\n            -DNSHostName \"gmsa-sqlsvc.$DomainName\" `\r\n            -Description 'Group Managed Service Account for SQL Server' `\r\n            -KerberosEncryptionType AES128, AES256 `\r\n            -ManagedPasswordIntervalInDays 30 `\r\n            -PrincipalsAllowedToRetrieveManagedPassword 'GRP-SQLAdmins'\r\n        Write-Output \"  Created gMSA: gmsa-sqlsvc\"\r\n    } else {\r\n        Write-Output \"  gMSA already exists: gmsa-sqlsvc\"\r\n    }\r\n    Write-Output \"  NOTE: After SQL servers join the domain, add their computer accounts:\"\r\n    Write-Output \"    Set-ADServiceAccount gmsa-sqlsvc -PrincipalsAllowedToRetrieveManagedPassword @{Add='YOURPC$'}\"\r\n} catch {\r\n    Write-Output \"  WARNING: gMSA creation failed (non-fatal): $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Summary\r\n# ============================================================================\r\nWrite-Output \"\"\r\nWrite-Output \"==========================================\"\r\nWrite-Output \" AD Configuration Complete\"\r\nWrite-Output \"==========================================\"\r\nWrite-Output \" Domain:    $DomainName\"\r\nWrite-Output \" Domain DN: $domainDN\"\r\nWrite-Output \" OUs:       Lab Accounts, Service Accounts, Admins, Lab Groups, Lab Servers, SQL Servers, App Servers\"\r\nWrite-Output \" Groups:    GRP-DomainAdmins-Lab (manual), GRP-SQLAdmins, GRP-AppAdmins, GRP-MCMAdmins, GRP-ServerAdmins, GRP-DomainJoin\"\r\nWrite-Output \" Accounts:  svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa\"\r\nWrite-Output \" Admins:    lab-admin (delegated OU admin), mcm-admin, sql-admin\"\r\nWrite-Output \" gMSA:      gmsa-sqlsvc\"\r\nWrite-Output \" DNS Fwd:   168.63.129.16 (Azure internal DNS) -- all DCs\"\r\nif (-not [string]::IsNullOrWhiteSpace($EntraIdDomain)) {\r\n    Write-Output \" Entra ID:  $EntraIdDomain (strategy: $DomainStrategy)\"\r\n}\r\nWrite-Output \"==========================================\"\r\n\r\nStop-Transcript\r\n\r\n# Redact the password from the transcript log. The RunCommand handler passes\r\n# protectedParameters as command-line arguments, so the SvcPassword value\r\n# appears in the transcript header (the \"Command line:\" field).\r\n$logPath = \"C:\\WindowsTemp\\ConfigureAD.log\"\r\nif ((Test-Path $logPath) -and -not [string]::IsNullOrWhiteSpace($SvcPassword)) {\r\n    $raw = [System.IO.File]::ReadAllText($logPath)\r\n    $redacted = $raw.Replace($SvcPassword, '********')\r\n    [System.IO.File]::WriteAllText($logPath, $redacted)\r\n}\r\n"
           },
           "resources": [
             {
@@ -2261,6 +3051,14 @@
                   {
                     "name": "DomainName",
                     "value": "[parameters('domainName')]"
+                  },
+                  {
+                    "name": "EntraIdDomain",
+                    "value": "[parameters('entraIdDomain')]"
+                  },
+                  {
+                    "name": "DomainStrategy",
+                    "value": "[parameters('domainStrategy')]"
                   }
                 ]
               }
@@ -2276,7 +3074,348 @@
       },
       "dependsOn": [
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc01')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc02')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgIdentity'))]"
+      ]
+    },
+    {
+      "condition": "[variables('deployEntraConnectVm')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-entra-connect",
+      "resourceGroup": "[variables('rgIdentity')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "[parameters('vmNameEntraConnect')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "vmSize": {
+            "value": "[parameters('sizeManagement')]"
+          },
+          "subnetId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.snetAdId.value]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "imagePublisher": {
+            "value": "[parameters('imagePublisher')]"
+          },
+          "imageOffer": {
+            "value": "[parameters('imageOffer')]"
+          },
+          "imageSku": {
+            "value": "[parameters('imageSku')]"
+          },
+          "privateIpAddress": {
+            "value": "[parameters('entraConnectIp')]"
+          },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('role', 'entra-connect'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "maxLength": 15,
+              "metadata": {
+                "description": "Name of the virtual machine (also used as computer name)"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for deployment"
+              }
+            },
+            "vmSize": {
+              "type": "string",
+              "metadata": {
+                "description": "VM size SKU"
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the subnet for the NIC"
+              }
+            },
+            "adminUsername": {
+              "type": "string",
+              "metadata": {
+                "description": "Local admin username"
+              }
+            },
+            "adminPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Local admin password"
+              }
+            },
+            "imagePublisher": {
+              "type": "string",
+              "defaultValue": "MicrosoftWindowsServer",
+              "metadata": {
+                "description": "OS image publisher"
+              }
+            },
+            "imageOffer": {
+              "type": "string",
+              "defaultValue": "WindowsServer",
+              "metadata": {
+                "description": "OS image offer"
+              }
+            },
+            "imageSku": {
+              "type": "string",
+              "defaultValue": "2022-datacenter-g2",
+              "metadata": {
+                "description": "OS image SKU"
+              }
+            },
+            "imageVersion": {
+              "type": "string",
+              "defaultValue": "latest",
+              "metadata": {
+                "description": "OS image version"
+              }
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional static private IP address. Leave empty for dynamic allocation."
+              }
+            },
+            "dataDiskCount": {
+              "type": "int",
+              "defaultValue": 0,
+              "minValue": 0,
+              "maxValue": 4,
+              "metadata": {
+                "description": "Number of data disks to attach (each 128 GB Premium SSD)"
+              }
+            },
+            "dataDiskSizeGb": {
+              "type": "int",
+              "defaultValue": 128,
+              "metadata": {
+                "description": "Size of each data disk in GB"
+              }
+            },
+            "dataDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for data disks"
+              }
+            },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
+            "availabilitySetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional: Availability Set resource ID"
+              }
+            },
+            "loadBalancerBackendPoolId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional: Load Balancer backend address pool resource ID (for ILB association)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags to apply to all resources"
+              }
+            }
+          },
+          "variables": {
+            "copy": [
+              {
+                "name": "dataDisks",
+                "count": "[length(range(0, parameters('dataDiskCount')))]",
+                "input": {
+                  "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
+                  "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
+                  "createOption": "Attach",
+                  "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
+                    "storageAccountType": "[parameters('dataDiskSku')]"
+                  },
+                  "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
+                }
+              }
+            ],
+            "nicName": "[format('{0}-nic', parameters('vmName'))]",
+            "useStaticIp": "[not(empty(parameters('privateIpAddress')))]",
+            "useLb": "[not(empty(parameters('loadBalancerBackendPoolId')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-11-01",
+              "name": "[variables('nicName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "privateIPAllocationMethod": "[if(variables('useStaticIp'), 'Static', 'Dynamic')]",
+                      "privateIPAddress": "[if(variables('useStaticIp'), parameters('privateIpAddress'), null())]",
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2024-03-01",
+              "name": "[parameters('vmName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "availabilitySet": "[if(not(empty(parameters('availabilitySetId'))), createObject('id', parameters('availabilitySetId')), null())]",
+                "osProfile": {
+                  "computerName": "[parameters('vmName')]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "windowsConfiguration": {
+                    "provisionVMAgent": true,
+                    "enableAutomaticUpdates": true
+                  }
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "[parameters('imagePublisher')]",
+                    "offer": "[parameters('imageOffer')]",
+                    "sku": "[parameters('imageSku')]",
+                    "version": "[parameters('imageVersion')]"
+                  },
+                  "osDisk": {
+                    "name": "[format('{0}-osdisk', parameters('vmName'))]",
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                      "storageAccountType": "[parameters('osDiskSku')]"
+                    },
+                    "caching": "ReadWrite",
+                    "diskSizeGB": 128
+                  },
+                  "dataDisks": "[variables('dataDisks')]"
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+                    }
+                  ]
+                },
+                "diagnosticsProfile": {
+                  "bootDiagnostics": {
+                    "enabled": true
+                  }
+                }
+              },
+              "dependsOn": [
+                "dataDisksRes",
+                "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vmId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+            },
+            "vmName": {
+              "type": "string",
+              "value": "[parameters('vmName')]"
+            },
+            "nicId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+            },
+            "privateIpAddress": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', variables('nicName')), '2023-11-01').ipConfigurations[0].properties.privateIPAddress]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgIdentity'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
       ]
     },
     {
@@ -2321,8 +3460,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "14978676730037363441"
+              "version": "0.41.2.15936",
+              "templateHash": "7638458125040640361"
             }
           },
           "parameters": {
@@ -2393,7 +3532,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; $pw = ConvertTo-SecureString {13}{14}{15} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {16}{17}{18} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({19}{20}\\{21}{22}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {23}DC promotion attempt $attempt of $maxRetries{24}; try {{ Install-ADDSDomainController -DomainName {25}{26}{27} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {28}Attempt $attempt failed: $_{29}; if ($attempt -lt $maxRetries) {{ Write-Output {30}Waiting 60s before retry...{31}; Start-Sleep 60 }} else {{ throw {32}DC promotion failed after $maxRetries attempts: $_{33} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
             }
@@ -2409,6 +3548,248 @@
       "dependsOn": [
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-dc02')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc01')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgIdentity'))]"
+      ]
+    },
+    {
+      "condition": "[variables('deployEntraConnectVm')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-dj-entra-connect",
+      "resourceGroup": "[variables('rgIdentity')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "[parameters('vmNameEntraConnect')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "domainName": {
+            "value": "[parameters('domainName')]"
+          },
+          "domainJoinUser": {
+            "value": "[variables('domainJoinUser')]"
+          },
+          "domainJoinPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "ouPath": {
+            "value": "[format('OU=App Servers,OU=Lab Servers,{0}', variables('domainDN'))]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('role', 'domain-join'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the existing VM to domain-join"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "domainName": {
+              "type": "string",
+              "metadata": {
+                "description": "Fully qualified domain name (e.g., azlab.local)"
+              }
+            },
+            "domainJoinUser": {
+              "type": "string",
+              "metadata": {
+                "description": "UPN or DOMAIN\\user with permission to join machines to the domain"
+              }
+            },
+            "domainJoinPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Password for the domain join account"
+              }
+            },
+            "ouPath": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional OU path for the computer object (e.g., OU=SQL Servers,OU=Lab Servers,DC=azlab,DC=local). Leave empty for default Computers container."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "variables": {
+            "domainJoinOptions": 3
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "JsonADDomainExtension",
+                "typeHandlerVersion": "1.3",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "Name": "[parameters('domainName')]",
+                  "OUPath": "[parameters('ouPath')]",
+                  "User": "[parameters('domainJoinUser')]",
+                  "Restart": "true",
+                  "Options": "[variables('domainJoinOptions')]"
+                },
+                "protectedSettings": {
+                  "Password": "[parameters('domainJoinPassword')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
+            }
+          ],
+          "outputs": {
+            "extensionId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/JoinDomain', parameters('vmName')), '/')[0], split(format('{0}/JoinDomain', parameters('vmName')), '/')[1])]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-configure-ad')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-entra-connect')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc02')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgIdentity'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableEntraIntegration')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-install-entra-connect",
+      "resourceGroup": "[variables('rgIdentity')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vmName": {
+            "value": "[variables('entraConnectTargetVm')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[union(variables('commonTags'), createObject('role', 'entra-connect'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "5556119285925256426"
+            }
+          },
+          "parameters": {
+            "vmName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the VM to install Entra Connect on"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "variables": {
+            "$fxv#0": "<#\r\n.SYNOPSIS\r\n    Install Microsoft Entra Connect Sync on the target server.\r\n    Runs as a VM RunCommand after the server is domain-joined.\r\n\r\n.DESCRIPTION\r\n    Pre-installs Entra Connect Sync by:\r\n    1. Enforcing TLS 1.2 as the default security protocol\r\n    2. Downloading the latest Entra Connect installer from Microsoft\r\n    3. Running a silent installation\r\n\r\n    The Entra Connect configuration wizard must be completed manually via\r\n    RDP/Bastion after installation. The wizard requires interactive\r\n    authentication with an Entra ID Global Administrator account.\r\n\r\n.NOTES\r\n    Post-install manual steps:\r\n    1. RDP/Bastion into this server\r\n    2. Launch the Entra Connect wizard from the desktop shortcut\r\n    3. Select \"Customize\" for custom configuration\r\n    4. Choose \"Password Hash Synchronization\" (PHS) as the sign-on method\r\n    5. Authenticate with Entra ID Global Administrator credentials\r\n    6. Connect to on-prem AD forest using Enterprise Admin credentials\r\n    7. Configure OU filtering (select Lab Accounts, Lab Groups, Lab Servers)\r\n    8. Enable \"Azure AD Domain and OU filtering\"\r\n    9. Optional: Enable device writeback for hybrid Entra ID join\r\n    10. Start initial synchronization\r\n#>\r\n\r\n$ErrorActionPreference = 'Stop'\r\nStart-Transcript -Path 'C:\\WindowsTemp\\Install-EntraConnect.log' -Append\r\n\r\n# ============================================================================\r\n# Enforce TLS 1.2\r\n# ============================================================================\r\nWrite-Output 'Configuring TLS 1.2 as default protocol...'\r\n[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n\r\n# Set TLS 1.2 as default for .NET Framework (machine-wide)\r\n$regPaths = @(\r\n    'HKLM:\\SOFTWARE\\Microsoft\\.NETFramework\\v4.0.30319'\r\n    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\.NETFramework\\v4.0.30319'\r\n)\r\nforeach ($path in $regPaths) {\r\n    if (Test-Path $path) {\r\n        Set-ItemProperty -Path $path -Name 'SchUseStrongCrypto' -Value 1 -Type DWord\r\n        Set-ItemProperty -Path $path -Name 'SystemDefaultTlsVersions' -Value 1 -Type DWord\r\n    }\r\n}\r\nWrite-Output '  TLS 1.2 configured'\r\n\r\n# ============================================================================\r\n# Download Entra Connect\r\n# ============================================================================\r\n$downloadUrl = 'https://download.microsoft.com/download/B/0/0/B00291D0-5A83-4DE7-86F5-980BC00DE05A/AzureADConnect.msi'\r\n$installerPath = 'C:\\WindowsTemp\\AzureADConnect.msi'\r\n\r\nWrite-Output 'Downloading Microsoft Entra Connect...'\r\nif (Test-Path $installerPath) {\r\n    Write-Output '  Installer already exists, re-downloading for latest version...'\r\n    Remove-Item $installerPath -Force\r\n}\r\n\r\ntry {\r\n    $wc = New-Object System.Net.WebClient\r\n    $wc.DownloadFile($downloadUrl, $installerPath)\r\n    $fileSize = (Get-Item $installerPath).Length / 1MB\r\n    Write-Output \"  Downloaded: $installerPath ($([math]::Round($fileSize, 1)) MB)\"\r\n} catch {\r\n    throw \"Failed to download Entra Connect: $_\"\r\n}\r\n\r\n# ============================================================================\r\n# Install Entra Connect (silent)\r\n# ============================================================================\r\nWrite-Output 'Installing Microsoft Entra Connect (silent)...'\r\n$msiArgs = '/i', $installerPath, '/quiet', '/norestart', '/log', 'C:\\WindowsTemp\\AzureADConnect-Install.log'\r\n$process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArgs -Wait -PassThru\r\n\r\nif ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {\r\n    Write-Output \"  Installation completed (exit code: $($process.ExitCode))\"\r\n    if ($process.ExitCode -eq 3010) {\r\n        Write-Output '  NOTE: A reboot is required to complete installation'\r\n    }\r\n} else {\r\n    throw \"Entra Connect installation failed with exit code: $($process.ExitCode). Check C:\\WindowsTemp\\AzureADConnect-Install.log\"\r\n}\r\n\r\n# ============================================================================\r\n# Summary\r\n# ============================================================================\r\nWrite-Output ''\r\nWrite-Output '=========================================='\r\nWrite-Output ' Entra Connect Installation Complete'\r\nWrite-Output '=========================================='\r\nWrite-Output ' Installer path : C:\\WindowsTemp\\AzureADConnect.msi'\r\nWrite-Output ' Install log    : C:\\WindowsTemp\\AzureADConnect-Install.log'\r\nWrite-Output ''\r\nWrite-Output ' NEXT STEPS (manual):'\r\nWrite-Output '   1. RDP or Bastion into this server'\r\nWrite-Output '   2. Launch \"Azure AD Connect\" from the desktop or Start menu'\r\nWrite-Output '   3. Complete the configuration wizard:'\r\nWrite-Output '      - Sign-on method: Password Hash Synchronization (PHS)'\r\nWrite-Output '      - Entra ID: Authenticate with Global Administrator'\r\nWrite-Output '      - On-prem AD: Connect using Enterprise Admin credentials'\r\nWrite-Output '      - OU filtering: Select Lab Accounts, Lab Groups, Lab Servers'\r\nWrite-Output '      - Optional features: Device writeback (for hybrid Entra join)'\r\nWrite-Output '   4. Start initial synchronization'\r\nWrite-Output '=========================================='\r\n\r\nStop-Transcript\r\n"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/InstallEntraConnect', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 900,
+                "source": {
+                  "script": "[variables('$fxv#0')]"
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "runCommandId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/InstallEntraConnect', parameters('vmName')), '/')[0], split(format('{0}/InstallEntraConnect', parameters('vmName')), '/')[1])]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-dj-entra-connect')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc02')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgIdentity'))]"
       ]
     },
@@ -2446,8 +3827,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12357900753089267207"
+              "version": "0.41.2.15936",
+              "templateHash": "10520452331920987438"
             }
           },
           "parameters": {
@@ -2555,8 +3936,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "1945967071267949883"
+              "version": "0.41.2.15936",
+              "templateHash": "6273128364922630325"
             }
           },
           "parameters": {
@@ -2763,6 +4144,9 @@
           "dataDiskSku": {
             "value": "Premium_LRS"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server', 'site', 'main'))]"
           }
@@ -2773,8 +4157,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -2878,6 +4262,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -2908,9 +4304,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -2945,6 +4341,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -2975,7 +4391,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -2996,6 +4412,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -3073,6 +4490,9 @@
           "dataDiskSku": {
             "value": "Premium_LRS"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server', 'site', 'main'))]"
           }
@@ -3083,8 +4503,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -3188,6 +4608,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -3218,9 +4650,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -3255,6 +4687,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -3285,7 +4737,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -3306,6 +4758,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -3383,6 +4836,9 @@
           "dataDiskSku": {
             "value": "Premium_LRS"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server', 'site', 'site1'))]"
           }
@@ -3393,8 +4849,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -3498,6 +4954,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -3528,9 +4996,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -3565,6 +5033,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -3595,7 +5083,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -3616,6 +5104,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -3699,6 +5188,9 @@
           "loadBalancerBackendPoolId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-ilb-aoag'), '2025-04-01').outputs.backendPoolId.value]"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server-aoag', 'site', 'site2', 'aoagNode', '1'))]"
           }
@@ -3709,8 +5201,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -3814,6 +5306,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -3844,9 +5348,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -3881,6 +5385,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -3911,7 +5435,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -3932,6 +5456,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -4017,6 +5542,9 @@
           "loadBalancerBackendPoolId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-ilb-aoag'), '2025-04-01').outputs.backendPoolId.value]"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server-aoag', 'site', 'site2', 'aoagNode', '2'))]"
           }
@@ -4027,8 +5555,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -4132,6 +5660,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -4162,9 +5702,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -4199,6 +5739,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -4229,7 +5789,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -4250,6 +5810,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -4321,8 +5882,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -4376,6 +5937,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4396,7 +5977,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4454,8 +6038,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -4509,6 +6093,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4529,7 +6133,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4587,8 +6194,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -4642,6 +6249,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4662,7 +6289,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4720,8 +6350,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -4775,6 +6405,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4795,7 +6445,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4853,8 +6506,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -4908,6 +6561,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -4928,7 +6601,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4988,6 +6664,9 @@
           "dataDiskCount": "[if(parameters('colocateSql'), createObject('value', 2), createObject('value', 0))]",
           "dataDiskSizeGb": "[if(parameters('colocateSql'), createObject('value', 128), createObject('value', 0))]",
           "dataDiskSku": "[if(parameters('colocateSql'), createObject('value', 'Premium_LRS'), createObject('value', 'Standard_LRS'))]",
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', if(parameters('colocateSql'), 'cas-sql', 'cas'), 'site', 'main'))]"
           }
@@ -4998,8 +6677,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -5103,6 +6782,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -5133,9 +6824,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -5170,6 +6861,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -5200,7 +6911,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -5221,6 +6932,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -5292,6 +7004,9 @@
           "dataDiskCount": "[if(parameters('colocateSql'), createObject('value', 2), createObject('value', 0))]",
           "dataDiskSizeGb": "[if(parameters('colocateSql'), createObject('value', 128), createObject('value', 0))]",
           "dataDiskSku": "[if(parameters('colocateSql'), createObject('value', 'Premium_LRS'), createObject('value', 'Standard_LRS'))]",
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', if(parameters('colocateSql'), 'child-primary-sql', 'child-primary'), 'site', 'main'))]"
           }
@@ -5302,8 +7017,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -5407,6 +7122,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -5437,9 +7164,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -5474,6 +7201,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -5504,7 +7251,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -5525,6 +7272,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -5596,6 +7344,9 @@
           "dataDiskCount": "[if(parameters('colocateSql'), createObject('value', 2), createObject('value', 0))]",
           "dataDiskSizeGb": "[if(parameters('colocateSql'), createObject('value', 128), createObject('value', 0))]",
           "dataDiskSku": "[if(parameters('colocateSql'), createObject('value', 'Premium_LRS'), createObject('value', 'Standard_LRS'))]",
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', if(parameters('colocateSql'), 'child-primary-sql', 'child-primary'), 'site', 'site1'))]"
           }
@@ -5606,8 +7357,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -5711,6 +7462,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -5741,9 +7504,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -5778,6 +7541,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -5808,7 +7591,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -5829,6 +7612,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -5897,6 +7681,9 @@
           "imageSku": {
             "value": "[parameters('imageSku')]"
           },
+          "osDiskSku": {
+            "value": "[parameters('osDiskSku')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'child-primary', 'site', 'site2'))]"
           }
@@ -5907,8 +7694,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8923749400445405374"
+              "version": "0.41.2.15936",
+              "templateHash": "2586549761866347546"
             }
           },
           "parameters": {
@@ -6012,6 +7799,18 @@
                 "description": "Storage type for data disks"
               }
             },
+            "osDiskSku": {
+              "type": "string",
+              "defaultValue": "Premium_LRS",
+              "allowedValues": [
+                "Premium_LRS",
+                "StandardSSD_LRS",
+                "Standard_LRS"
+              ],
+              "metadata": {
+                "description": "Storage type for the OS disk"
+              }
+            },
             "availabilitySetId": {
               "type": "string",
               "defaultValue": "",
@@ -6042,9 +7841,9 @@
                 "input": {
                   "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
                   "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Empty",
-                  "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                  "createOption": "Attach",
                   "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
                     "storageAccountType": "[parameters('dataDiskSku')]"
                   },
                   "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
@@ -6079,6 +7878,26 @@
               }
             },
             {
+              "copy": {
+                "name": "dataDisksRes",
+                "count": "[length(range(0, parameters('dataDiskCount')))]"
+              },
+              "type": "Microsoft.Compute/disks",
+              "apiVersion": "2024-03-02",
+              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "[parameters('dataDiskSku')]"
+              },
+              "properties": {
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
+                "creationData": {
+                  "createOption": "Empty"
+                }
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines",
               "apiVersion": "2024-03-01",
               "name": "[parameters('vmName')]",
@@ -6109,7 +7928,7 @@
                     "name": "[format('{0}-osdisk', parameters('vmName'))]",
                     "createOption": "FromImage",
                     "managedDisk": {
-                      "storageAccountType": "Premium_LRS"
+                      "storageAccountType": "[parameters('osDiskSku')]"
                     },
                     "caching": "ReadWrite",
                     "diskSizeGB": 128
@@ -6130,6 +7949,7 @@
                 }
               },
               "dependsOn": [
+                "dataDisksRes",
                 "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
               ]
             }
@@ -6199,8 +8019,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -6254,6 +8074,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6274,7 +8114,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -6332,8 +8175,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -6387,6 +8230,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6407,7 +8270,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -6465,8 +8331,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -6520,6 +8386,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6540,7 +8426,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -6598,8 +8487,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "12704414440004065925"
+              "version": "0.41.2.15936",
+              "templateHash": "1995510310399443685"
             }
           },
           "parameters": {
@@ -6653,6 +8542,26 @@
           },
           "resources": [
             {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 600,
+                "source": {
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                },
+                "parameters": [
+                  {
+                    "name": "DomainName",
+                    "value": "[parameters('domainName')]"
+                  }
+                ]
+              }
+            },
+            {
               "type": "Microsoft.Compute/virtualMachines/extensions",
               "apiVersion": "2024-03-01",
               "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
@@ -6673,7 +8582,10 @@
                 "protectedSettings": {
                   "Password": "[parameters('domainJoinPassword')]"
                 }
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -6715,6 +8627,10 @@
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.storageAccountName.value]"
     },
+    "cloudWitnessFileShareName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.fileShareName.value]"
+    },
     "keyVaultName": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-keyvault'), '2025-04-01').outputs.keyVaultName.value]"
@@ -6738,6 +8654,14 @@
     "deploymentTierDeployed": {
       "type": "int",
       "value": "[parameters('deploymentTier')]"
+    },
+    "entraIntegrationEnabled": {
+      "type": "bool",
+      "value": "[parameters('enableEntraIntegration')]"
+    },
+    "entraConnectVmName": {
+      "type": "string",
+      "value": "[if(variables('deployEntraConnectVm'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-entra-connect'), '2025-04-01').outputs.vmName.value, if(parameters('enableEntraIntegration'), variables('dc02Name'), 'not-deployed'))]"
     }
   }
 }

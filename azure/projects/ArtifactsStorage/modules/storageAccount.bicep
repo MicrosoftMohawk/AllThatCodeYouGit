@@ -1,45 +1,40 @@
 // ============================================================================
-// Module: Storage Account with Azure Files Share (File Share Witness)
-// Deploys a locked-down StorageV2 account with an Azure Files share for
-// WSFC File Share Witness quorum.  Supports optional on-premises AD DS
-// authentication for Kerberos-based SMB access from domain-joined VMs.
+// Module: Storage Account with Azure Files Share
+// Deploys a locked-down storage account with a single Azure Files share for
+// artifact storage.  Supports optional on-premises AD DS authentication for
+// Kerberos-based SMB access from domain-joined VMs.
 // ============================================================================
 
-@description('Prefix for the storage account name (will be combined with uniqueString)')
-param namePrefix string
+@description('Globally unique storage account name')
+param storageAccountName string
 
-@description('Azure region for deployment')
+@description('Azure region')
 param location string
 
-@description('Storage account SKU')
-@allowed([
-  'Standard_LRS'
-  'Standard_GRS'
-  'Standard_ZRS'
-])
-param skuName string = 'Standard_LRS'
-
 @description('Name of the Azure Files share')
-param shareName string = 'witness'
+param shareName string = 'artifacts'
 
 @description('Share quota in GiB')
-param shareQuotaGiB int = 5
+param shareQuotaGiB int = 100
 
-@description('Tags to apply')
+@description('Tags')
 param tags object = {}
 
 // ---------------------------------------------------------------------------
 // AD DS Identity-Based Authentication (optional)
 // When enabled, domain-joined VMs can mount the share via Kerberos.
-// These properties are populated post-deployment by running
-// Register-StorageInAD.ps1 on the DC and then updating the storage
-// account via 'az storage account update --enable-files-adds true'.
+// The storage account is registered as a computer account in AD and the
+// properties below are populated by deploy.ps1 after running the AD
+// registration script on the domain controller.
 // ---------------------------------------------------------------------------
 
 @description('Enable on-premises AD DS authentication for SMB file shares')
 param enableADDS bool = false
 
-@description('AD domain FQDN (e.g., azlab.local)')
+@description('Enable Entra ID Kerberos authentication for SMB file shares (alternative to AD DS)')
+param enableEntraKerberos bool = false
+
+@description('AD domain FQDN (e.g., azlab.local) — used for both AD DS and Entra Kerberos modes')
 param adDomainName string = ''
 
 @description('AD NetBIOS domain name (e.g., AZLAB)')
@@ -57,12 +52,8 @@ param adDomainSid string = ''
 @description('SID of the computer account created in AD for this storage account')
 param adAzureStorageSid string = ''
 
-// ---------------------------------------------------------------------------
-// Generate a globally unique, deterministic name (max 24 chars)
-// ---------------------------------------------------------------------------
-var uniqueSuffix = uniqueString(resourceGroup().id, namePrefix)
-var rawName = toLower('${namePrefix}${uniqueSuffix}')
-var storageAccountName = length(rawName) > 24 ? substring(rawName, 0, 24) : rawName
+@description('Entra ID tenant GUID (used as domain GUID for Entra Kerberos)')
+param entraIdTenantId string = ''
 
 // ---------------------------------------------------------------------------
 // Storage Account — fully locked down
@@ -73,7 +64,7 @@ resource stg 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   tags: tags
   kind: 'StorageV2'
   sku: {
-    name: skuName
+    name: 'Standard_LRS'
   }
   properties: {
     supportsHttpsTrafficOnly: true
@@ -86,7 +77,14 @@ resource stg 'Microsoft.Storage/storageAccounts@2023-05-01' = {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
     }
-    azureFilesIdentityBasedAuthentication: enableADDS ? {
+    azureFilesIdentityBasedAuthentication: enableEntraKerberos ? {
+      directoryServiceOptions: 'AADKERB'
+      activeDirectoryProperties: {
+        domainName: adDomainName
+        domainGuid: entraIdTenantId
+      }
+      defaultSharePermission: 'StorageFileDataSmbShareContributor'
+    } : enableADDS ? {
       directoryServiceOptions: 'AD'
       activeDirectoryProperties: {
         domainName: adDomainName
@@ -121,6 +119,6 @@ resource share 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01
 // ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
-output storageAccountName string = stg.name
 output storageAccountId string = stg.id
+output storageAccountName string = stg.name
 output fileShareName string = share.name

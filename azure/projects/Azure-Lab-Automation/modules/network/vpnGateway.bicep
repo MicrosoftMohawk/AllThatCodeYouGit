@@ -23,8 +23,8 @@ param rootCertData string
 param rootCertName string = 'P2SRootCert'
 
 @description('VPN Gateway SKU')
-@allowed(['VpnGw1', 'VpnGw2', 'VpnGw3'])
-param gatewaySku string = 'VpnGw1'
+@allowed(['VpnGw1AZ', 'VpnGw2AZ', 'VpnGw3AZ'])
+param gatewaySku string = 'VpnGw1AZ'
 
 @description('Tags')
 param tags object = {}

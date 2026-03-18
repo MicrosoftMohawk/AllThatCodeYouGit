@@ -8,7 +8,7 @@
     login session, and executes the Bicep deployment at the subscription scope.
 
     The deployment is tiered:
-      Tier 1: Core networking, AD Domain Controllers, Azure Bastion, Cloud Witness
+      Tier 1: Core networking, AD Domain Controllers, Azure Bastion, File Share Witness
       Tier 2: + SQL Server VMs (5 total, including AOAG pair at Site 2 with ILB)
       Tier 3: + Application VMs (CAS + 3 child primaries)
 
@@ -28,6 +28,24 @@
 .PARAMETER SkipDomainJoin
     When specified, SQL and MCM VMs will NOT be domain-joined during deployment.
     By default, all SQL and MCM VMs are automatically joined to the AD domain.
+
+.PARAMETER EnableEntraIntegration
+    Enable Entra ID hybrid identity integration. Deploys Entra Connect Sync
+    server and a management VM with Entra ID login capability.
+
+.PARAMETER EntraIdDomain
+    Entra ID tenant domain (e.g., usaavd.com). Required when -EnableEntraIntegration
+    is specified.
+
+.PARAMETER DomainStrategy
+    AD domain naming strategy:
+      subdomain   = AD domain is ad.{EntraIdDomain} (default, cleanest UPN routing)
+      independent = AD domain is separate, EntraIdDomain added as UPN suffix
+
+.PARAMETER EntraConnectPlacement
+    Where to install Entra Connect:
+      dedicated = New VM (default)
+      dc02      = Install on DC02 (saves cost)
 
 .PARAMETER WhatIf
     Preview changes without deploying (Azure What-If).
@@ -83,7 +101,20 @@ param(
 
     [switch]$SkipDomainJoin,
 
+    [switch]$EnableEntraIntegration,
+
+    [string]$EntraIdDomain,
+
+    [ValidateSet('subdomain', 'independent')]
+    [string]$DomainStrategy = 'subdomain',
+
+    [ValidateSet('dedicated', 'dc02')]
+    [string]$EntraConnectPlacement = 'dedicated',
+
     [string]$TimeZone,
+
+    [ValidateSet('Premium_LRS', 'StandardSSD_LRS', 'Standard_LRS')]
+    [string]$OsDiskSku = 'Premium_LRS',
 
     [switch]$WhatIf,
 
@@ -260,6 +291,7 @@ if ($DeploymentTier -ge 2) {
                 Write-Ok "Existing admin password retrieved from Key Vault (will reuse)."
             } else {
                 Write-Host "   WARNING: Could not retrieve admin password from Key Vault." -ForegroundColor Yellow
+                Write-Host "   Key Vault has no public endpoint. Connect via VPN for incremental deploys." -ForegroundColor Yellow
                 Write-Host "   A new password will be generated. DC extensions may re-run." -ForegroundColor Yellow
                 $ExistingAdminPassword = ''
             }
@@ -309,16 +341,45 @@ if (-not $IsIncremental) {
 
     if (-not [string]::IsNullOrWhiteSpace($kvAdminInput)) {
         $kvAdminInput = $kvAdminInput.Trim()
+
+        # Ensure the Graph API token is valid — az ad commands use the Graph
+        # resource which has a separate token from ARM.  If the Graph token has
+        # expired the ad commands will fail with AADSTS135010.
+        az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "   Graph API token expired — re-authenticating for Microsoft Graph..." -ForegroundColor Yellow
+            az login --scope https://graph.microsoft.com//.default | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "Graph re-authentication failed. Skipping KV RBAC."
+                Write-Host "   Run 'az login --scope https://graph.microsoft.com//.default' manually, then retry." -ForegroundColor Gray
+            }
+        }
+
         # Try as user first (contains @), then as group
         if ($kvAdminInput -match '@') {
             Write-Host "   Looking up user: $kvAdminInput" -ForegroundColor Gray
-            $userObj = az ad user show --id $kvAdminInput --query id -o tsv 2>&1
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($userObj)) {
-                $DeployerObjectId = $userObj.Trim()
-                $KvPrincipalType = 'User'
-                Write-Ok "User found — Object ID: $DeployerObjectId"
+
+            # If the entered UPN matches the currently signed-in user, use
+            # az ad signed-in-user (avoids Graph lookup issues with MSA /
+            # B2B guest accounts that can't resolve their own UPN).
+            if ($account -and $account.user.name -eq $kvAdminInput) {
+                $userObjId = az ad signed-in-user show --query id -o tsv 2>&1
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($userObjId)) {
+                    $DeployerObjectId = ("$userObjId").Trim()
+                    $KvPrincipalType = 'User'
+                    Write-Ok "Signed-in user matched — Object ID: $DeployerObjectId"
+                } else {
+                    Write-Fail "Could not resolve signed-in user object ID. Skipping KV RBAC."
+                }
             } else {
-                Write-Fail "User '$kvAdminInput' not found in Entra ID. Skipping KV RBAC."
+                $userObj = az ad user show --id $kvAdminInput --query id -o tsv 2>&1
+                if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($userObj)) {
+                    $DeployerObjectId = ("$userObj").Trim()
+                    $KvPrincipalType = 'User'
+                    Write-Ok "User found — Object ID: $DeployerObjectId"
+                } else {
+                    Write-Fail "User '$kvAdminInput' not found in Entra ID. Skipping KV RBAC."
+                }
             }
         } else {
             Write-Host "   Looking up group: $kvAdminInput" -ForegroundColor Gray
@@ -378,7 +439,118 @@ if ($Destroy) {
         exit 0
     }
 
-    foreach ($rg in $existingRgs) {
+    # ── Clean up cross-RG dependencies in snet-pe ────────────────────────────
+    # Other deployments (e.g., ArtifactsStorage) may have Private Endpoints
+    # and DNS VNet links that reference the lab VNet.  These must be removed
+    # before the lab's network RG can be deleted.
+    # ─────────────────────────────────────────────────────────────────────────
+    $networkRg = "$BaseName-rg-network"
+    $labVnetName = "$BaseName-vnet"
+    if ($existingRgs -contains $networkRg) {
+        Write-Step "Checking for cross-resource-group dependencies in the lab VNet..."
+
+        # Find Private Endpoints whose NIC lives in a different RG (e.g., artifacts-rg-artifacts)
+        $peSubnetId = az network vnet subnet show `
+            -g $networkRg --vnet-name $labVnetName -n snet-pe `
+            --query id -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($peSubnetId)) {
+            $peJsonRaw = az network private-endpoint list `
+                --query "[?subnet.id=='$($peSubnetId.Trim())' && !starts_with(resourceGroup, '$BaseName')].{name:name, rg:resourceGroup, id:id}" `
+                -o json 2>&1
+            $externalPEs = $null
+            if ($LASTEXITCODE -eq 0) {
+                try { $externalPEs = $peJsonRaw | ConvertFrom-Json } catch { $externalPEs = $null }
+            }
+
+            if ($externalPEs -and $externalPEs.Count -gt 0) {
+                Write-Host "   Found $($externalPEs.Count) Private Endpoint(s) from other deployments in snet-pe:" -ForegroundColor Yellow
+                foreach ($extPe in $externalPEs) {
+                    Write-Host "     - $($extPe.name) (RG: $($extPe.rg))" -ForegroundColor Yellow
+                }
+                Write-Host ""
+                Write-Host "   These must be deleted first, or lab VNet deletion will fail." -ForegroundColor Yellow
+                Write-Host "   [1] Delete them now and continue (recommended)" -ForegroundColor White
+                Write-Host "   [2] Skip — I'll clean them up manually" -ForegroundColor White
+                $peChoice = Read-Host "   Select (default: 1)"
+                if ($peChoice -ne '2') {
+                    foreach ($extPe in $externalPEs) {
+                        Write-Host "   Deleting PE: $($extPe.name) in $($extPe.rg)..." -ForegroundColor Gray
+                        az network private-endpoint delete --ids $extPe.id -o none 2>&1
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Fail "Failed to delete $($extPe.name). You may need to delete its resource group first."
+                        } else {
+                            Write-Ok "Deleted $($extPe.name)"
+                        }
+                    }
+                }
+            }
+        }
+
+        # Find Private DNS Zone VNet links that reference the lab VNet from other RGs
+        $labVnetId = az network vnet show -g $networkRg -n $labVnetName --query id -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($labVnetId)) {
+            $labVnetId = $labVnetId.Trim()
+
+            # Check known privatelink DNS zones that may have been created by add-on projects
+            $dnsZoneNames = @(
+                'privatelink.file.core.windows.net'
+                'privatelink.blob.core.windows.net'
+                'privatelink.table.core.windows.net'
+                'privatelink.queue.core.windows.net'
+            )
+            foreach ($zoneName in $dnsZoneNames) {
+                # Search for DNS zones with VNet links to our VNet in the lab's network RG
+                $zoneJsonRaw = az network private-dns link vnet list `
+                    --zone-name $zoneName `
+                    --resource-group "$BaseName-rg-network" `
+                    --query "[?virtualNetwork.id=='$labVnetId']" `
+                    -o json 2>&1
+                $zoneLinks = $null
+                if ($LASTEXITCODE -eq 0) {
+                    try { $zoneLinks = $zoneJsonRaw | ConvertFrom-Json } catch { $zoneLinks = $null }
+                }
+
+                if (-not $zoneLinks -or $zoneLinks.Count -eq 0) {
+                    # Also check common add-on RG naming patterns
+                    $addOnRgs = az group list --query "[?!starts_with(name, '$BaseName') && contains(name, 'artifacts')].name" -o tsv 2>&1
+                    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($addOnRgs)) {
+                        foreach ($addOnRg in ($addOnRgs -split "`n" | Where-Object { $_ })) {
+                            $addOnRg = $addOnRg.Trim()
+                            $linksJsonRaw = az network private-dns link vnet list `
+                                --zone-name $zoneName `
+                                --resource-group $addOnRg `
+                                --query "[?virtualNetwork.id=='$labVnetId'].{name:name, zone:split(id,'/')[8]}" `
+                                -o json 2>&1
+                            $links = $null
+                            if ($LASTEXITCODE -eq 0) {
+                                try { $links = $linksJsonRaw | ConvertFrom-Json } catch { $links = $null }
+                            }
+                            if ($links -and $links.Count -gt 0) {
+                                foreach ($link in $links) {
+                                    Write-Host "   Removing DNS VNet link '$($link.name)' from zone '$zoneName' in RG '$addOnRg'..." -ForegroundColor Gray
+                                    az network private-dns link vnet delete `
+                                        --name $link.name `
+                                        --zone-name $zoneName `
+                                        --resource-group $addOnRg `
+                                        --yes -o none 2>&1
+                                    if ($LASTEXITCODE -eq 0) {
+                                        Write-Ok "Removed DNS link: $($link.name)"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # Delete non-network RGs first (async), then network RG last (synchronous)
+    # so VNet/subnet deletion waits for dependent NIC cleanups to complete.
+    $nonNetworkRgs = @($existingRgs | Where-Object { $_ -ne $networkRg })
+    $hasNetworkRg = $existingRgs -contains $networkRg
+
+    foreach ($rg in $nonNetworkRgs) {
         Write-Step "Deleting resource group: $rg"
         az group delete --name $rg --yes --no-wait
         if ($LASTEXITCODE -ne 0) {
@@ -388,10 +560,77 @@ if ($Destroy) {
         }
     }
 
+    if ($hasNetworkRg) {
+        if ($nonNetworkRgs.Count -gt 0) {
+            Write-Step "Waiting for non-network resource groups to finish deleting..."
+            $waitFailed = $false
+            foreach ($rg in $nonNetworkRgs) {
+                Write-Host "   Waiting on $rg..." -ForegroundColor Gray
+                az group wait --name $rg --deleted --timeout 600 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    # az group wait exits non-zero if the RG still exists (timeout) OR
+                    # exits 0 / 3 (not found) if it was already deleted.  Verify explicitly.
+                    $stillExists = az group exists --name $rg 2>&1
+                    if ($stillExists -eq 'true') {
+                        Write-Fail "Timed out waiting for $rg to delete — it still exists"
+                        $waitFailed = $true
+                    } else {
+                        Write-Ok "$rg confirmed deleted"
+                    }
+                } else {
+                    Write-Ok "$rg deleted"
+                }
+            }
+
+            if ($waitFailed) {
+                Write-Fail "One or more non-network RGs are still being deleted."
+                Write-Host "   Cannot safely delete $networkRg while dependents remain." -ForegroundColor Yellow
+                Write-Host "   Re-run this script with -Destroy once the pending deletions complete." -ForegroundColor Yellow
+                Write-Host "   Monitor: az group list --query `"[?starts_with(name,'$BaseName')]`" -o table" -ForegroundColor Gray
+                exit 1
+            }
+
+            # Brief buffer for ARM to fully deregister NICs from subnets (eventual consistency)
+            Write-Host "   Allowing time for ARM to deregister subnet references..." -ForegroundColor Gray
+            Start-Sleep -Seconds 30
+        }
+
+        Write-Step "Deleting network resource group: $networkRg (synchronous — this may take a few minutes)"
+        az group delete --name $networkRg --yes
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Failed to delete $networkRg"
+            Write-Host "   This usually means a dependent resource still references the VNet." -ForegroundColor Yellow
+            Write-Host "   Check for leftover Private Endpoints or DNS links, then retry." -ForegroundColor Yellow
+            exit 1
+        }
+        Write-Ok "$networkRg deleted"
+    }
+
+    # ── Post-destroy verification ────────────────────────────────────────────
+    Write-Step "Verifying all resource groups are removed..."
+    $remaining = @()
+    foreach ($rg in $existingRgs) {
+        $stillExists = az group exists --name $rg 2>&1
+        if ($stillExists -eq 'true') {
+            $remaining += $rg
+        }
+    }
+
+    if ($remaining.Count -gt 0) {
+        Write-Header "Destroy Incomplete"
+        Write-Host "   The following resource groups still exist:" -ForegroundColor Yellow
+        foreach ($rg in $remaining) {
+            Write-Host "     - $rg" -ForegroundColor Yellow
+        }
+        Write-Host ""
+        Write-Host "   Re-run with -Destroy once these finish deleting, or remove manually:" -ForegroundColor Gray
+        Write-Host "   az group delete --name <rg-name> --yes" -ForegroundColor Gray
+        exit 1
+    }
+
     Write-Header "Destroy Complete"
-    Write-Host "   All resource group deletions have been initiated (--no-wait)." -ForegroundColor White
-    Write-Host "   Deletions run asynchronously and may take several minutes to complete." -ForegroundColor Gray
-    Write-Host "   Monitor progress: az group list --query `"[?starts_with(name,'$BaseName')]`" -o table" -ForegroundColor Gray
+    Write-Host "   All resource groups for '$BaseName' have been deleted." -ForegroundColor Green
+    Write-Host ""
     exit 0
 }
 
@@ -453,6 +692,84 @@ if ([string]::IsNullOrWhiteSpace($DomainName) -or $DomainName -notmatch '^[a-zA-
     exit 1
 }
 Write-Ok "Domain: $DomainName (NetBIOS: $($DomainName.Split('.')[0].ToUpper()))"
+
+# =============================================================================
+# 3aa0. Entra ID Integration Configuration
+# =============================================================================
+$EnableEntraBool = [bool]$EnableEntraIntegration
+
+if (-not $EnableEntraBool) {
+    Write-Step "Entra ID hybrid identity integration..."
+    Write-Host ""
+    Write-Host "   Enable Entra ID integration to deploy:" -ForegroundColor White
+    Write-Host "     - Entra Connect Sync (syncs on-prem AD identities to Entra ID)" -ForegroundColor Gray
+    Write-Host "     - UPN suffix configuration in AD for Entra ID domain" -ForegroundColor Gray
+    Write-Host "     - Enables Entra ID Kerberos for Azure Files" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "   NOTE: The management VM (Entra ID joined) is deployed separately" -ForegroundColor Yellow
+    Write-Host "   after the lab is running via: .\deploy-mgmt.ps1" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   Prerequisites: Entra ID tenant, Azure AD P2 license" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   [1] Skip (AD-only deployment)" -ForegroundColor White
+    Write-Host "   [2] Enable Entra ID integration" -ForegroundColor White
+    $entraChoice = Read-Host "   Select (default: 1)"
+    if ($entraChoice -eq '2') {
+        $EnableEntraBool = $true
+    }
+}
+
+if ($EnableEntraBool) {
+    # --- Entra ID Domain ---
+    if ([string]::IsNullOrWhiteSpace($EntraIdDomain)) {
+        $EntraIdDomain = Read-Host "   Enter your Entra ID tenant domain (e.g., usaavd.com)"
+    }
+    if ([string]::IsNullOrWhiteSpace($EntraIdDomain) -or $EntraIdDomain -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$') {
+        Write-Fail "Invalid Entra ID domain. Must be a valid FQDN (e.g., usaavd.com)"
+        exit 1
+    }
+    $EntraIdDomain = $EntraIdDomain.Trim()
+    Write-Ok "Entra ID domain: $EntraIdDomain"
+
+    # --- Domain Strategy ---
+    if (-not $PSBoundParameters.ContainsKey('DomainStrategy')) {
+        Write-Host ""
+        Write-Host "   AD domain naming strategy:" -ForegroundColor White
+        Write-Host "   [1] Subdomain: AD domain = ad.$EntraIdDomain (recommended, UPNs match)" -ForegroundColor White
+        Write-Host "   [2] Independent: AD domain = $DomainName (UPN suffix $EntraIdDomain added to AD)" -ForegroundColor White
+        $dsChoice = Read-Host "   Select (default: 1)"
+        if ($dsChoice -eq '2') {
+            $DomainStrategy = 'independent'
+        } else {
+            $DomainStrategy = 'subdomain'
+        }
+    }
+    Write-Ok "Domain strategy: $DomainStrategy"
+
+    # Auto-derive domain name in subdomain mode
+    if ($DomainStrategy -eq 'subdomain') {
+        $DomainName = "ad.$EntraIdDomain"
+        Write-Ok "AD domain auto-set to: $DomainName (subdomain of $EntraIdDomain)"
+    }
+
+    # --- Entra Connect Placement ---
+    if (-not $PSBoundParameters.ContainsKey('EntraConnectPlacement')) {
+        Write-Host ""
+        Write-Host "   Entra Connect Sync placement:" -ForegroundColor White
+        Write-Host "   [1] Dedicated VM (recommended for production parity)" -ForegroundColor White
+        Write-Host "   [2] Install on DC02 (saves cost)" -ForegroundColor White
+        $ecpChoice = Read-Host "   Select (default: 1)"
+        if ($ecpChoice -eq '2') {
+            $EntraConnectPlacement = 'dc02'
+        } else {
+            $EntraConnectPlacement = 'dedicated'
+        }
+    }
+    Write-Ok "Entra Connect placement: $EntraConnectPlacement"
+} else {
+    $EntraIdDomain = ''
+    Write-Step "Entra ID integration: DISABLED (AD-only deployment)"
+}
 
 # =============================================================================
 # 3aa. VM Timezone Selection
@@ -604,10 +921,11 @@ $JoinDomainBool = -not [bool]$SkipDomainJoin   # default = join domain
 if (-not $SkipDomainJoin) {
     Write-Step "Domain join configuration..."
     Write-Host ""
-    Write-Host "   SQL and MCM VMs can be automatically domain-joined during deployment" -ForegroundColor White
-    Write-Host "   using the svc-domjoin service account (created by AD automation)." -ForegroundColor Gray
-    Write-Host "   SQL VMs → OU=SQL Servers,OU=Lab Servers" -ForegroundColor Gray
-    Write-Host "   MCM VMs → OU=App Servers,OU=Lab Servers" -ForegroundColor Gray
+    Write-Host "   SQL, MCM, and Entra Connect VMs can be automatically domain-joined" -ForegroundColor White
+    Write-Host "   during deployment using the svc-domjoin service account." -ForegroundColor Gray
+    Write-Host "   (The management VM is always Entra ID joined, not AD domain-joined.)" -ForegroundColor Gray
+    Write-Host "   SQL VMs -> OU=SQL Servers,OU=Lab Servers" -ForegroundColor Gray
+    Write-Host "   MCM/Entra Connect VMs -> OU=App Servers,OU=Lab Servers" -ForegroundColor Gray
     Write-Host ""
     Write-Host "   [1] Domain-join all SQL and MCM VMs (recommended)" -ForegroundColor White
     Write-Host "   [2] Skip domain join — deploy as workgroup servers" -ForegroundColor White
@@ -626,25 +944,40 @@ if (-not $SkipDomainJoin) {
 # =============================================================================
 # 3b. VPN Gateway — Self-Signed Certificate for P2S
 # =============================================================================
+# Cert lookup is store-based: we search CurrentUser\My for certs whose Subject
+# CN matches the deployment BaseName.  This means incremental deploys (even from
+# the same machine with a regenerated admin password) always re-export the PFX
+# with the *current* password, eliminating the password-desync problem that
+# occurs when Key Vault is unreachable behind its private endpoint.
+# =============================================================================
 Write-Step "VPN Gateway P2S certificate setup..."
 $CertDir = Join-Path $ScriptRoot 'certs'
 $RootCertPath = Join-Path $CertDir 'P2SRootCert.cer'
 $ClientPfxPath = Join-Path $CertDir 'P2SClientCert.pfx'
 
-if (Test-Path $RootCertPath) {
-    Write-Ok "Existing root certificate found: $RootCertPath"
-    $rootCertBase64 = Get-Content $RootCertPath -Raw
-    # Strip PEM headers/footers and whitespace
-    $rootCertBase64 = ($rootCertBase64 -replace '-----BEGIN CERTIFICATE-----' -replace '-----END CERTIFICATE-----').Trim() -replace '\r?\n',''
+# --- Step 1: Search the personal certificate store for existing certs --------
+$rootCertSubject  = "CN=P2SRootCert-$BaseName"
+$clientCertSubject = "CN=P2SClientCert-$BaseName"
+
+$rootCert = Get-ChildItem -Path 'Cert:\CurrentUser\My' |
+    Where-Object { $_.Subject -eq $rootCertSubject } |
+    Sort-Object NotAfter -Descending | Select-Object -First 1
+
+$clientCert = Get-ChildItem -Path 'Cert:\CurrentUser\My' |
+    Where-Object { $_.Subject -eq $clientCertSubject } |
+    Sort-Object NotAfter -Descending | Select-Object -First 1
+
+if ($rootCert -and $clientCert) {
+    # --- Reuse existing certs from the personal store -------------------------
+    Write-Ok "Root cert found in store: $($rootCert.Subject) (Thumbprint: $($rootCert.Thumbprint), Expires: $($rootCert.NotAfter.ToString('yyyy-MM-dd')))"
+    Write-Ok "Client cert found in store: $($clientCert.Subject) (Thumbprint: $($clientCert.Thumbprint), Expires: $($clientCert.NotAfter.ToString('yyyy-MM-dd')))"
 } else {
+    # --- Create new certs (fresh deploy or different workstation) --------------
     Write-Host "   Generating self-signed root CA and client certificate..." -ForegroundColor Yellow
 
-    if (-not (Test-Path $CertDir)) { New-Item -Path $CertDir -ItemType Directory -Force | Out-Null }
-
-    # Create Root CA cert (self-signed, in CurrentUser\My)
     $rootCert = New-SelfSignedCertificate `
         -Type Custom `
-        -Subject "CN=P2SRootCert-$BaseName" `
+        -Subject $rootCertSubject `
         -KeySpec Signature `
         -KeyExportPolicy Exportable `
         -KeyLength 2048 `
@@ -656,10 +989,9 @@ if (Test-Path $RootCertPath) {
 
     Write-Ok "Root CA created: $($rootCert.Subject) (Thumbprint: $($rootCert.Thumbprint))"
 
-    # Create Client cert signed by root
     $clientCert = New-SelfSignedCertificate `
         -Type Custom `
-        -Subject "CN=P2SClientCert-$BaseName" `
+        -Subject $clientCertSubject `
         -KeySpec Signature `
         -KeyExportPolicy Exportable `
         -KeyLength 2048 `
@@ -669,28 +1001,94 @@ if (Test-Path $RootCertPath) {
         -NotAfter (Get-Date).AddYears(3)
 
     Write-Ok "Client cert created: $($clientCert.Subject) (Thumbprint: $($clientCert.Thumbprint))"
+}
 
-    # Export root cert public key as Base64 .cer
-    $rootDer = $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
-    $rootCertBase64 = [Convert]::ToBase64String($rootDer)
-    $rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICATE-----"
-    Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
-    Write-Ok "Root cert exported: $RootCertPath"
+# --- Step 2: Always (re-)export cert files with the current admin password ---
+# This ensures the PFX password always matches the admin password that will be
+# stored in Key Vault, regardless of whether it was reused or regenerated.
+if (-not (Test-Path $CertDir)) { New-Item -Path $CertDir -ItemType Directory -Force | Out-Null }
 
-    # Export client cert as PFX (protected with admin password)
-    $pfxPwd = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
-    Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath -Password $pfxPwd | Out-Null
-    Write-Ok "Client PFX exported: $ClientPfxPath (password = admin password in Key Vault)"
+# Export root cert public key as Base64 .cer
+$rootDer = $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+$rootCertBase64 = [Convert]::ToBase64String($rootDer)
+$rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICATE-----"
+Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
+Write-Ok "Root cert exported: $RootCertPath"
 
-    # Add root cert to Trusted Root store (CurrentUser) so VPN client trusts it
-    $trustedStore = New-Object System.Security.Cryptography.X509Certificates.X509Store(
-        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-    $trustedStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+# Export client cert as PFX (TripleDES_SHA1 for cross-OS compatibility).
+# If the existing cert's private key is non-exportable (created by an older
+# version of the script or imported without the exportable flag), delete it
+# and recreate with -KeyExportPolicy Exportable so re-export always works.
+# If the root cert also lacks a usable private key (imported from .cer or
+# corrupted), both certs are recreated from scratch.
+$pfxPwd = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
+try {
+    Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
+        -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+} catch {
+    if ($_.Exception.Message -match 'non-exportable|private key') {
+        Write-Host "   Existing client cert has a non-exportable private key. Recreating..." -ForegroundColor Yellow
+        $clientCert | Remove-Item -Force
+
+        # Check if the root cert has an accessible private key for signing.
+        # If not, recreate it too (the VPN Gateway validates the root public
+        # key which gets re-exported to .cer and passed as vpnRootCertData).
+        if (-not $rootCert.HasPrivateKey) {
+            Write-Host "   Root cert also lacks a private key. Recreating both certs..." -ForegroundColor Yellow
+            $rootCert | Remove-Item -Force
+            $rootCert = New-SelfSignedCertificate `
+                -Type Custom `
+                -Subject $rootCertSubject `
+                -KeySpec Signature `
+                -KeyExportPolicy Exportable `
+                -KeyLength 2048 `
+                -HashAlgorithm sha256 `
+                -KeyUsageProperty Sign `
+                -KeyUsage CertSign `
+                -CertStoreLocation 'Cert:\CurrentUser\My' `
+                -NotAfter (Get-Date).AddYears(3)
+            Write-Ok "Root CA recreated: $($rootCert.Subject) (Thumbprint: $($rootCert.Thumbprint))"
+
+            # Re-export root cert public key with the new cert
+            $rootDer = $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+            $rootCertBase64 = [Convert]::ToBase64String($rootDer)
+            $rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICATE-----"
+            Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
+            Write-Ok "Root cert re-exported: $RootCertPath"
+        }
+
+        $clientCert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject $clientCertSubject `
+            -KeySpec Signature `
+            -KeyExportPolicy Exportable `
+            -KeyLength 2048 `
+            -HashAlgorithm sha256 `
+            -Signer $rootCert `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -NotAfter (Get-Date).AddYears(3)
+        Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
+            -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+        Write-Ok "Client cert recreated with exportable key: $($clientCert.Subject) (Thumbprint: $($clientCert.Thumbprint))"
+    } else {
+        throw
+    }
+}
+Write-Ok "Client PFX exported: $ClientPfxPath (password = admin password in Key Vault)"
+
+# --- Step 3: Ensure root cert is in Trusted Root CAs ------------------------
+$trustedStore = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+    [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+    [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+$trustedStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+$existingRoot = $trustedStore.Certificates | Where-Object { $_.Thumbprint -eq $rootCert.Thumbprint }
+if ($existingRoot) {
+    Write-Ok "Root cert already in Trusted Root (Thumbprint: $($rootCert.Thumbprint))"
+} else {
     $trustedStore.Add($rootCert)
-    $trustedStore.Close()
     Write-Ok "Root cert added to CurrentUser\\Trusted Root Certification Authorities"
 }
+$trustedStore.Close()
 
 $VpnRootCertData = $rootCertBase64
 
@@ -698,7 +1096,7 @@ $VpnRootCertData = $rootCertBase64
 # 4. Deploy
 # =============================================================================
 $tierDescription = switch ($DeploymentTier) {
-    1 { "Tier 1: Core Networking + AD (DCs, Bastion, Cloud Witness)" }
+    1 { "Tier 1: Core Networking + AD (DCs, Bastion, File Share Witness)" }
     2 { "Tier 2: + SQL Server VMs$(if($ColocateSqlBool){' (AOAG only — SQL colocated on MCM)'} else {' (5 VMs including AOAG at Site 2)'})" }
     3 { "Tier 3: Full Lab (Core + SQL + MCM servers)" }
 }
@@ -718,6 +1116,71 @@ $vmNameParams = @(
 $colocateParam = if ($ColocateSqlBool) { 'colocateSql=true' } else { 'colocateSql=false' }
 $joinDomainParam = if ($JoinDomainBool) { 'joinDomain=true' } else { 'joinDomain=false' }
 
+# --- Detect existing private DNS zones -----------------------------------------
+# If ArtifactsStorage (or another project) already created a privatelink DNS
+# zone linked to the lab VNet, pass its resource ID so the Bicep modules reuse
+# it instead of creating a conflicting duplicate (Azure blocks duplicate VNet
+# links to different zones of the same name).
+#
+# Detection logic:
+#   1. List all zones of the given name across the subscription
+#   2. For each zone, check if it has a VNet link to the lab VNet
+#   3. Use the first zone that has such a link
+#   4. If no linked zone exists, let the Bicep template create one
+# ---------------------------------------------------------------------------
+$labVnetName = "$BaseName-vnet"
+$labNetworkRg = "$BaseName-rg-network"
+$labVnetId = az network vnet show -g $labNetworkRg -n $labVnetName --query id -o tsv 2>&1
+if ($LASTEXITCODE -ne 0) { $labVnetId = '' } else { $labVnetId = $labVnetId.Trim() }
+
+function Find-LinkedPrivateDnsZone {
+    param([string]$ZoneName, [string]$VNetId)
+    if ([string]::IsNullOrWhiteSpace($VNetId)) { return '' }
+
+    # Get all zones with this name (returns resource ID + resource group)
+    $zonesJson = az network private-dns zone list `
+        --query "[?name=='$ZoneName'].{id:id, rg:resourceGroup}" -o json 2>&1
+    if ($LASTEXITCODE -ne 0) { return '' }
+    $zones = $null
+    try { $zones = $zonesJson | ConvertFrom-Json } catch { return '' }
+    if (-not $zones -or $zones.Count -eq 0) { return '' }
+
+    foreach ($zone in $zones) {
+        # Check if this zone has a VNet link pointing to the lab VNet
+        $linksJson = az network private-dns link vnet list `
+            --zone-name $ZoneName --resource-group $zone.rg `
+            --query "[?virtualNetwork.id=='$VNetId'].id" -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($linksJson)) {
+            return $zone.id.Trim()
+        }
+    }
+    return ''
+}
+
+# -- privatelink.file.core.windows.net (File Share Witness PE) --
+$existingFileDnsZoneId = ''
+Write-Step "Checking for existing privatelink.file.core.windows.net DNS zone linked to $labVnetName..."
+if (-not [string]::IsNullOrWhiteSpace($labVnetId)) {
+    $existingFileDnsZoneId = Find-LinkedPrivateDnsZone -ZoneName 'privatelink.file.core.windows.net' -VNetId $labVnetId
+}
+if (-not [string]::IsNullOrWhiteSpace($existingFileDnsZoneId)) {
+    Write-Ok "Found linked zone: $existingFileDnsZoneId"
+} else {
+    Write-Ok "No linked zone found — Bicep will create one"
+}
+
+# -- privatelink.vaultcore.azure.net (Key Vault PE) --
+$existingKvDnsZoneId = ''
+Write-Step "Checking for existing privatelink.vaultcore.azure.net DNS zone linked to $labVnetName..."
+if (-not [string]::IsNullOrWhiteSpace($labVnetId)) {
+    $existingKvDnsZoneId = Find-LinkedPrivateDnsZone -ZoneName 'privatelink.vaultcore.azure.net' -VNetId $labVnetId
+}
+if (-not [string]::IsNullOrWhiteSpace($existingKvDnsZoneId)) {
+    Write-Ok "Found linked zone: $existingKvDnsZoneId"
+} else {
+    Write-Ok "No linked zone found — Bicep will create one"
+}
+
 # Build the complete --parameters array (each key=value as a separate element
 # so PowerShell passes them as individual arguments to az CLI).
 # Each key=value is a separate array element so PowerShell passes them as
@@ -732,6 +1195,13 @@ $deployParams = @(
     "deployerObjectId=$DeployerObjectId"
     "kvPrincipalType=$KvPrincipalType"
     "vpnRootCertData=$VpnRootCertData"
+    "enableEntraIntegration=$($EnableEntraBool.ToString().ToLower())"
+    "entraIdDomain=$EntraIdDomain"
+    "domainStrategy=$DomainStrategy"
+    "entraConnectPlacement=$EntraConnectPlacement"
+    "osDiskSku=$OsDiskSku"
+    "existingFileDnsZoneId=$existingFileDnsZoneId"
+    "existingKvDnsZoneId=$existingKvDnsZoneId"
     $colocateParam
     $joinDomainParam
 ) + $vmNameParams
@@ -744,7 +1214,13 @@ Write-Host "  Incremental     : $IsIncremental" -ForegroundColor White
 Write-Host "  SQL Colocated   : $ColocateSqlBool" -ForegroundColor White
 Write-Host "  Domain Join     : $JoinDomainBool" -ForegroundColor White
 Write-Host "  Domain Name     : $DomainName" -ForegroundColor White
+Write-Host "  Entra ID        : $(if ($EnableEntraBool) {"ENABLED (domain: $EntraIdDomain, strategy: $DomainStrategy)"} else {'Disabled'})" -ForegroundColor White
+if ($EnableEntraBool) {
+    Write-Host "  Entra Connect   : $EntraConnectPlacement" -ForegroundColor White
+}
 Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
+Write-Host "  DNS Zone (file) : $(if ($existingFileDnsZoneId) {"Reusing: $existingFileDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
+Write-Host "  DNS Zone (vault): $(if ($existingKvDnsZoneId) {"Reusing: $existingKvDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White
 Write-Host "  Admin Password  : $(if ($IsIncremental) {'(reused from Key Vault)'} else {'(auto-generated, stored in Key Vault)'})" -ForegroundColor White
 Write-Host "  Template        : $templateFile" -ForegroundColor White
@@ -815,6 +1291,9 @@ if ($VmTimeZone -ne 'UTC') {
         @{ Name = "$BaseName-dc01"; RG = "$BaseName-rg-identity" }
         @{ Name = "$BaseName-dc02"; RG = "$BaseName-rg-identity" }
     )
+    if ($EnableEntraBool -and $EntraConnectPlacement -eq 'dedicated') {
+        $vmTargets += @{ Name = "$BaseName-aadcs"; RG = "$BaseName-rg-identity" }
+    }
     if ($DeploymentTier -ge 2) {
         if (-not $ColocateSqlBool) {
             $vmTargets += @{ Name = $VmNames.SqlCas;  RG = "$BaseName-rg-main" }
@@ -854,6 +1333,239 @@ if ($VmTimeZone -ne 'UTC') {
     }
 } else {
     Write-Ok "VM Timezone: UTC (default — no change needed)"
+}
+
+# =============================================================================
+# 5a1. Post-Deployment: Register File Share Witness Storage Account in AD
+# =============================================================================
+# The witness storage account is deployed in Tier 1 with shared keys disabled
+# and a private endpoint.  Before the WSFC cluster (Tier 2) can use it as a
+# File Share Witness, the storage account must be registered as a computer
+# object in AD for Kerberos SMB authentication.
+#
+# This section automates the full registration workflow:
+#   1. Discover the witness storage account by tag
+#   2. Temporarily enable shared key access
+#   3. Generate and retrieve the kerb1 Kerberos key
+#   4. Run Register-StorageInAD.ps1 on DC01 via RunCommand
+#   5. Configure the storage account with AD DS identity
+#   6. Flush KDC cache on DC02
+#   7. Verify Kerberos SMB mount from a domain-joined VM
+#   8. Re-disable shared key access
+# =============================================================================
+if ($DeploymentTier -ge 2 -and $JoinDomainBool) {
+    Write-Header "Registering File Share Witness Storage Account in AD"
+
+    $rgIdentity = "$BaseName-rg-identity"
+    $dcVmName   = "$BaseName-dc01"
+    $dc02VmName = "$BaseName-dc02"
+
+    # --- 1. Discover the witness storage account by tag ---
+    Write-Step "Discovering witness storage account..."
+    $witnessStgName = az storage account list `
+        --resource-group $rgIdentity `
+        --query "[?tags.workload=='file-share-witness'].name | [0]" -o tsv 2>&1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($witnessStgName)) {
+        Write-Fail "Could not find witness storage account in $rgIdentity."
+        Write-Host "   Skipping AD registration. Register manually later — see README section 6a." -ForegroundColor Yellow
+    } else {
+        $witnessStgName = $witnessStgName.Trim()
+        Write-Ok "Witness storage account: $witnessStgName"
+
+        # Check if already registered in AD (skip if so)
+        $addsEnabled = az storage account show `
+            --name $witnessStgName -g $rgIdentity `
+            --query "azureFilesIdentityBasedAuthentication.directoryServiceOptions" -o tsv 2>&1
+        if ($addsEnabled -eq 'AADDS' -or $addsEnabled -eq 'AD') {
+            Write-Ok "Storage account already registered for AD DS authentication — skipping"
+        } else {
+            # --- 2. Temporarily enable shared key access ---
+            Write-Step "Temporarily enabling shared key access..."
+            az storage account update `
+                --name $witnessStgName -g $rgIdentity `
+                --allow-shared-key-access true -o none 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "Failed to enable shared key access. Skipping AD registration."
+            } else {
+                Write-Ok "Shared key access enabled"
+
+                # --- 3. Generate and retrieve Kerberos key ---
+                Write-Step "Generating Kerberos key (kerb1)..."
+                az storage account keys renew `
+                    --account-name $witnessStgName -g $rgIdentity `
+                    --key key1 --key-type kerb -o none 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Fail "Failed to generate Kerberos key."
+                } else {
+                    $witnessKerbKey = az storage account keys list `
+                        --account-name $witnessStgName -g $rgIdentity `
+                        --expand-key-type kerb `
+                        --query "[?keyName=='kerb1'].value" -o tsv 2>&1
+                    $witnessKerbKey = ("$witnessKerbKey").Trim()
+
+                    if ([string]::IsNullOrWhiteSpace($witnessKerbKey)) {
+                        Write-Fail "Failed to retrieve Kerberos key."
+                    } else {
+                        Write-Ok "Kerberos key generated"
+
+                        # --- 4. Run Register-StorageInAD.ps1 on DC01 ---
+                        Write-Step "Registering storage account in AD (running on DC01)..."
+
+                        $adScriptPath = Join-Path $ScriptRoot 'modules' 'identity' 'scripts' 'Register-StorageInAD.ps1'
+                        $adScriptContent = Get-Content $adScriptPath -Raw
+                        # Strip comment block and param() block (az vm run-command doesn't bind params)
+                        $adScriptContent = $adScriptContent -replace '(?s)<#.*?#>\s*', ''
+                        $adScriptContent = $adScriptContent -replace '(?sm)param\s*\(.*?^\)\s*', ''
+
+                        # Prepend variable assignments
+                        $domainDNParts = ($DomainName -split '\.' | ForEach-Object { "DC=$_" }) -join ','
+                        $witnessOUPath = "OU=Storage Accounts,OU=Lab Servers,$domainDNParts"
+                        $witnessPreamble = @"
+`$StorageAccountName = '$($witnessStgName -replace "'","''")'
+`$StorageKerbKey = '$($witnessKerbKey -replace "'","''")'
+`$DomainName = '$($DomainName -replace "'","''")'
+`$OUPath = '$($witnessOUPath -replace "'","''")'
+
+"@
+                        $adScriptContent = $witnessPreamble + $adScriptContent
+
+                        $witnessTempScript = Join-Path ([System.IO.Path]::GetTempPath()) `
+                            "Register-WitnessInAD-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+                        $adScriptContent | Set-Content -Path $witnessTempScript -Encoding UTF8 -NoNewline
+
+                        $witnessResultRaw = az vm run-command invoke `
+                            --resource-group $rgIdentity `
+                            --name $dcVmName `
+                            --command-id RunPowerShellScript `
+                            --scripts "@$witnessTempScript" `
+                            -o json 2>&1
+
+                        Remove-Item $witnessTempScript -Force -ErrorAction SilentlyContinue
+
+                        # Parse the JSON response
+                        $witnessResultText = ($witnessResultRaw | ForEach-Object { "$_" }) -join "`n"
+                        try {
+                            $witnessResultJson = $witnessResultText | ConvertFrom-Json
+                            $witnessStdout = $witnessResultJson.value | Where-Object { $_.code -match 'StdOut' } | Select-Object -ExpandProperty message
+                            $witnessStderr = $witnessResultJson.value | Where-Object { $_.code -match 'StdErr' } | Select-Object -ExpandProperty message
+                        } catch {
+                            $witnessStdout = $witnessResultText
+                            $witnessStderr = ''
+                        }
+
+                        $witnessJsonMatch = [regex]::Match($witnessStdout, 'AD_REGISTRATION_RESULT=(.+)')
+                        if (-not $witnessJsonMatch.Success) {
+                            Write-Fail "AD registration failed on DC01."
+                            if ($witnessStdout) { ($witnessStdout -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray } }
+                            if ($witnessStderr) { ($witnessStderr -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Red } }
+                        } else {
+                            try {
+                                $witnessAdInfo = $witnessJsonMatch.Groups[1].Value | ConvertFrom-Json
+                            } catch {
+                                Write-Fail "Failed to parse AD registration JSON."
+                                $witnessAdInfo = $null
+                            }
+
+                            if ($witnessAdInfo) {
+                                Write-Ok "Computer account: $($witnessAdInfo.computerName)"
+                                Write-Ok "SPN: $($witnessAdInfo.spn)"
+
+                                # --- 5. Configure storage account with AD DS identity ---
+                                Write-Step "Configuring storage account for AD DS authentication..."
+                                az storage account update `
+                                    --name $witnessStgName -g $rgIdentity `
+                                    --enable-files-adds true `
+                                    --domain-name $DomainName `
+                                    --net-bios-domain-name $witnessAdInfo.netBiosDomainName `
+                                    --forest-name $witnessAdInfo.forestName `
+                                    --domain-guid $witnessAdInfo.domainGuid `
+                                    --domain-sid $witnessAdInfo.domainSid `
+                                    --azure-storage-sid $witnessAdInfo.azureStorageSid `
+                                    --sam-account-name $witnessAdInfo.computerName `
+                                    --account-type Computer `
+                                    --default-share-permission StorageFileDataSmbShareContributor `
+                                    -o none 2>&1
+
+                                if ($LASTEXITCODE -ne 0) {
+                                    Write-Fail "Failed to configure AD DS authentication on storage account."
+                                } else {
+                                    Write-Ok "AD DS authentication enabled on witness storage account"
+
+                                    # --- 6. Flush KDC cache on DC02 ---
+                                    Write-Step "Flushing KDC cache on DC02..."
+                                    az vm run-command invoke `
+                                        --resource-group $rgIdentity `
+                                        --name $dc02VmName `
+                                        --command-id RunPowerShellScript `
+                                        --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
+                                        --query "value[0].message" -o tsv 2>&1 | Out-Null
+                                    if ($LASTEXITCODE -eq 0) {
+                                        Write-Ok "DC02 KDC cache flushed"
+                                    } else {
+                                        Write-Host "   Warning: could not restart KDC on DC02." -ForegroundColor Yellow
+                                    }
+
+                                    # --- 7. Verify Kerberos SMB mount ---
+                                    $testRg = "$BaseName-rg-site2"
+                                    $testVm = $VmNames.SqlAoag1
+                                    Write-Step "Verifying Kerberos SMB mount from $testVm..."
+                                    $testVmState = az vm get-instance-view -g $testRg -n $testVm `
+                                        --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]" `
+                                        -o tsv 2>&1
+                                    if ($LASTEXITCODE -ne 0 -or $testVmState -notmatch 'running') {
+                                        Write-Host "   VM '$testVm' not available (state: $testVmState). Skipping verification." -ForegroundColor Yellow
+                                        Write-Host "   Verify manually: net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Yellow
+                                    } else {
+                                        $kerbTestScript = @"
+klist purge 2>&1 | Out-Null
+net use * /delete /y 2>&1 | Out-Null
+Start-Sleep -Seconds 2
+`$r = net use Z: "\\$witnessStgName.file.core.windows.net\witness" 2>&1
+Write-Host "MOUNT_EXIT=`$LASTEXITCODE"
+`$r | ForEach-Object { Write-Host `$_ }
+net use Z: /delete 2>&1 | Out-Null
+"@
+                                        $kerbTestFile = Join-Path ([System.IO.Path]::GetTempPath()) `
+                                            "Verify-WitnessMount-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+                                        $kerbTestScript | Set-Content -Path $kerbTestFile -Encoding UTF8 -NoNewline
+
+                                        $verifyResult = az vm run-command invoke `
+                                            -g $testRg -n $testVm `
+                                            --command-id RunPowerShellScript `
+                                            --scripts "@$kerbTestFile" `
+                                            --query "value[0].message" -o tsv 2>&1
+
+                                        Remove-Item $kerbTestFile -Force -ErrorAction SilentlyContinue
+
+                                        if ($verifyResult -match 'MOUNT_EXIT=0') {
+                                            Write-Ok "Kerberos SMB mount verified — File Share Witness is ready"
+                                        } else {
+                                            Write-Fail "Mount verification failed."
+                                            $verifyResult -split "`n" | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray }
+                                            Write-Host "   This may resolve after AD replication completes. Verify manually:" -ForegroundColor Yellow
+                                            Write-Host "   net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Yellow
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                # --- 8. Re-disable shared key access ---
+                Write-Step "Re-disabling shared key data-plane access..."
+                az storage account update `
+                    --name $witnessStgName -g $rgIdentity `
+                    --allow-shared-key-access false -o none 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "   Warning: failed to re-disable shared key access. Disable manually:" -ForegroundColor Yellow
+                    Write-Host "   az storage account update --name $witnessStgName -g $rgIdentity --allow-shared-key-access false" -ForegroundColor Gray
+                } else {
+                    Write-Ok "Shared key data-plane access re-disabled"
+                }
+            }
+        }
+    }
 }
 
 # =============================================================================
@@ -904,7 +1616,7 @@ Write-Header "Deployment Complete!"
 Write-Host ""
 Write-Host "  Resource Groups created:" -ForegroundColor White
 Write-Host "    - $BaseName-rg-network    (VNet, NSGs, Bastion, VPN Gateway)" -ForegroundColor Gray
-Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault, Cloud Witness)" -ForegroundColor Gray
+Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault, File Share Witness)" -ForegroundColor Gray
 if ($DeploymentTier -ge 2) {
     $mainContents = @()
     if (-not $ColocateSqlBool) { $mainContents += "$($VmNames.SqlCas)", "$($VmNames.SqlPrimA)" }
@@ -923,6 +1635,14 @@ if ($DeploymentTier -ge 2) {
 Write-Host ""
 Write-Host "  Deployed VMs:" -ForegroundColor Cyan
 Write-Host "    Identity : $BaseName-dc01, $BaseName-dc02" -ForegroundColor Gray
+if ($EnableEntraBool) {
+    if ($EntraConnectPlacement -eq 'dedicated') {
+        Write-Host "    EntraSync: $BaseName-aadcs (Entra Connect Sync)" -ForegroundColor Gray
+    } else {
+        Write-Host "    EntraSync: Installed on $BaseName-dc02" -ForegroundColor Gray
+    }
+    Write-Host "    Mgmt     : Deploy separately -> .\deploy-mgmt.ps1 -BaseName $BaseName" -ForegroundColor Yellow
+}
 if ($DeploymentTier -ge 2) {
     if (-not $ColocateSqlBool) {
         Write-Host "    SQL      : $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB)" -ForegroundColor Gray
@@ -936,9 +1656,10 @@ if ($DeploymentTier -ge 3) {
 
 Write-Host ""
 Write-Host "  Next Steps:" -ForegroundColor Cyan
-Write-Host "  1) Retrieve admin password from Key Vault:" -ForegroundColor White
+Write-Host "  1) Retrieve admin password from Key Vault (requires VPN):" -ForegroundColor White
 Write-Host "     az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv" -ForegroundColor Gray
 Write-Host "     (Find your KV name: az keyvault list --resource-group $BaseName-rg-identity --query [].name -o tsv)" -ForegroundColor Gray
+Write-Host "     NOTE: Key Vault has no public endpoint. You must be on VPN to access secrets." -ForegroundColor Yellow
 Write-Host "  2) Connect via Bastion: Portal > $BaseName-bastion > Connect to VM" -ForegroundColor White
 Write-Host "  3) Connect via VPN:" -ForegroundColor White
 Write-Host "     a) Download VPN client: Portal > $BaseName-vpngw > Point-to-site > Download VPN client" -ForegroundColor Gray
@@ -950,7 +1671,7 @@ Write-Host "  4) AD Domain Services (automated):" -ForegroundColor White
 Write-Host "     - DC01 promoted as first DC in $DomainName" -ForegroundColor Gray
 Write-Host "     - DC02 promoted as replica DC" -ForegroundColor Gray
 Write-Host "     - OUs, security groups, service accounts, and gMSA created" -ForegroundColor Gray
-Write-Host "     - Admin accounts: mcm-admin (GRP-MCMAdmins), sql-admin (GRP-SQLAdmins)" -ForegroundColor Gray
+Write-Host "     - Admin accounts: lab-admin (delegated OU admin), mcm-admin, sql-admin" -ForegroundColor Gray
 Write-Host "     - GRP-DomainAdmins-Lab created empty (populate manually)" -ForegroundColor Gray
 Write-Host "     - VNet DNS set to DC IPs (10.0.1.4, 10.0.1.5)" -ForegroundColor Gray
 if ($JoinDomainBool) {
@@ -962,6 +1683,52 @@ if ($JoinDomainBool) {
 } else {
     Write-Host "  5) Domain-join remaining servers (SQL, MCM) — MANUAL (skipped during deployment)" -ForegroundColor Yellow
 }
+if ($EnableEntraBool) {
+    Write-Host ""
+    Write-Host "  ** ENTRA ID INTEGRATION (manual post-deployment steps) **" -ForegroundColor Cyan
+    $entraConnectVm = if ($EntraConnectPlacement -eq 'dedicated') { "$BaseName-aadcs" } else { "$BaseName-dc02" }
+    Write-Host "  A) Complete Entra Connect wizard on $entraConnectVm :" -ForegroundColor White
+    Write-Host "     1. RDP/Bastion into $entraConnectVm" -ForegroundColor Gray
+    Write-Host "     2. Launch 'Azure AD Connect' from desktop" -ForegroundColor Gray
+    Write-Host "     3. Accept license terms, click Continue" -ForegroundColor Gray
+    Write-Host "     4. Click 'Customize' (not Express Settings) for OU filtering" -ForegroundColor Gray
+    Write-Host "     5. Click 'Install' (no optional prereqs needed for lab)" -ForegroundColor Gray
+    Write-Host "     6. User Sign-in: select 'Password Hash Synchronization', click Next" -ForegroundColor Gray
+    Write-Host "     7. Connect to Entra ID: sign in with Global Administrator credentials" -ForegroundColor Gray
+    Write-Host "     8. Connect Directories: Forest = $DomainName, click 'Add Directory'" -ForegroundColor Gray
+    Write-Host "        -> Select 'Create new AD account', enter Enterprise Admin creds:" -ForegroundColor Gray
+    Write-Host "           Username: $DomainName\labadmin  |  Password: (from Key Vault)" -ForegroundColor Gray
+    Write-Host "     9. Azure AD sign-in: verify UPN suffix is configured, click Next" -ForegroundColor Gray
+    Write-Host "    10. Domain/OU filtering: select 'Sync selected domains and OUs'" -ForegroundColor Gray
+    Write-Host "        -> Uncheck all, then check ONLY:" -ForegroundColor Gray
+    Write-Host "           [x] Lab Accounts  [x] Lab Groups  [x] Lab Servers" -ForegroundColor Gray
+    Write-Host "    11. Uniquely identifying users: keep defaults, click Next" -ForegroundColor Gray
+    Write-Host "    12. Filter users/devices: keep 'Synchronize all', click Next" -ForegroundColor Gray
+    Write-Host "    13. Optional features: 'Password hash synchronization' is pre-checked" -ForegroundColor Gray
+    Write-Host "        -> No additional features needed for the lab" -ForegroundColor Gray
+    Write-Host "    14. Click 'Install' to start configuration and initial sync" -ForegroundColor Gray
+    Write-Host "    15. Wait for sync to complete (2-5 min), then verify in Entra ID > Users" -ForegroundColor Gray
+    Write-Host "" -ForegroundColor Gray
+    Write-Host "     OPTIONAL: Hybrid Entra ID Join (after initial sync):" -ForegroundColor Yellow
+    Write-Host "     -> Re-open Entra Connect > Configure > Device options" -ForegroundColor Gray
+    Write-Host "     -> Select 'Configure Hybrid Microsoft Entra ID join'" -ForegroundColor Gray
+    Write-Host "     -> Check 'Windows 10 or later domain-joined devices'" -ForegroundColor Gray
+    Write-Host "     -> Select your forest, configure SCP (Service Connection Point)" -ForegroundColor Gray
+    Write-Host "     -> This allows domain-joined VMs to also register in Entra ID" -ForegroundColor Gray
+    Write-Host "  B) Deploy Management VM (pure Entra ID joined):" -ForegroundColor White
+    Write-Host "     Run AFTER the lab deployment completes successfully:" -ForegroundColor Yellow
+    Write-Host "       .\deploy-mgmt.ps1 -BaseName $BaseName -Location $Location" -ForegroundColor Cyan
+    Write-Host "     This deploys $BaseName-mgmt with Entra ID login, RSAT, Az CLI" -ForegroundColor Gray
+    Write-Host "     lab-admin has delegated control over Lab OUs (not Domain Admin)" -ForegroundColor Gray
+    Write-Host "     To manage AD: runas /netonly /user:$DomainName\lab-admin mmc.exe" -ForegroundColor Gray
+    Write-Host "  C) Artifacts Storage (Azure Files share):" -ForegroundColor White
+    Write-Host "     Deploy from: .\..\ArtifactsStorage\deploy.ps1" -ForegroundColor Gray
+    Write-Host "     Option 1 - AD DS (recommended): all domain-joined VMs can net use" -ForegroundColor Gray
+    Write-Host "       .\deploy.ps1 -NamePrefix artifacts -Location $Location -LabBaseName $BaseName" -ForegroundColor Cyan
+    Write-Host "     Option 2 - Entra Kerberos: requires Hybrid Entra Join + synced user" -ForegroundColor Gray
+    Write-Host "       .\deploy.ps1 -NamePrefix artifacts -Location $Location -LabBaseName $BaseName -EnableEntraKerberos" -ForegroundColor Cyan
+    Write-Host "     Mgmt VM + VPN: use az storage file --auth-mode login (either mode)" -ForegroundColor Gray
+}
 if ($DeploymentTier -ge 2) {
     if ($ColocateSqlBool) {
         Write-Host "  6) Install SQL Server on MCM VMs: $($VmNames.Cas), $($VmNames.PrimA), $($VmNames.PrimB)" -ForegroundColor White
@@ -969,7 +1736,7 @@ if ($DeploymentTier -ge 2) {
         Write-Host "  6) Install SQL Server on: $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB)" -ForegroundColor White
     }
     Write-Host "  7) Install SQL Server on AOAG nodes: $($VmNames.SqlAoag1), $($VmNames.SqlAoag2)" -ForegroundColor White
-    Write-Host "  8) Configure WSFC with Cloud Witness, create AOAG on Site 2 SQL nodes" -ForegroundColor White
+    Write-Host "  8) File Share Witness registered in AD (automated). Configure WSFC quorum + create AOAG on Site 2 SQL nodes" -ForegroundColor White
     Write-Host "  9) Create AG Listener using ILB IP 10.0.40.10 (probe port 59999)" -ForegroundColor White
 }
 if ($DeploymentTier -ge 3) {

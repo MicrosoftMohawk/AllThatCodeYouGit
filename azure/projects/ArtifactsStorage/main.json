@@ -1,0 +1,639 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "13694387965307234376"
+    }
+  },
+  "parameters": {
+    "namePrefix": {
+      "type": "string",
+      "maxLength": 10,
+      "metadata": {
+        "description": "Name prefix for all resources (e.g., \"artifacts\"). Max 10 characters."
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region for all resources"
+      }
+    },
+    "labVnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the lab VNet to link the Private DNS Zone to. This enables VPN-connected workstations to resolve the storage private endpoint. Example: /subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/..."
+      }
+    },
+    "peSubnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet resource ID within the lab VNet for the Private Endpoint. Example: /subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/.../subnets/snet-pe"
+      }
+    },
+    "deployerObjectId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure AD object ID of the user or group to grant Storage File Data SMB Share Contributor"
+      }
+    },
+    "principalType": {
+      "type": "string",
+      "defaultValue": "User",
+      "allowedValues": [
+        "User",
+        "Group"
+      ],
+      "metadata": {
+        "description": "Principal type for RBAC assignment"
+      }
+    },
+    "shareQuotaGiB": {
+      "type": "int",
+      "defaultValue": 100,
+      "minValue": 1,
+      "maxValue": 5120,
+      "metadata": {
+        "description": "Azure Files share quota in GiB"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to all resources"
+      }
+    },
+    "enableADDS": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable on-premises AD DS authentication for SMB file shares"
+      }
+    },
+    "adDomainName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AD domain FQDN (e.g., azlab.local)"
+      }
+    },
+    "adNetBiosDomainName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AD NetBIOS domain name (e.g., AZLAB)"
+      }
+    },
+    "adForestName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AD forest name (e.g., azlab.local)"
+      }
+    },
+    "adDomainGuid": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AD domain GUID"
+      }
+    },
+    "adDomainSid": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AD domain SID"
+      }
+    },
+    "adAzureStorageSid": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "SID of the computer account created in AD for this storage account"
+      }
+    }
+  },
+  "variables": {
+    "rgName": "[format('{0}-rg-artifacts', parameters('namePrefix'))]",
+    "uniqueSuffix": "[uniqueString(subscription().id, parameters('namePrefix'), 'artifacts')]",
+    "rawName": "[toLower(format('{0}stg{1}', parameters('namePrefix'), variables('uniqueSuffix')))]",
+    "storageAccountName": "[if(greater(length(variables('rawName')), 24), substring(variables('rawName'), 0, 24), variables('rawName'))]",
+    "shareName": "artifacts",
+    "commonTags": "[union(parameters('tags'), createObject('project', 'artifacts-storage', 'managedBy', 'bicep'))]",
+    "vnetNameSegments": "[split(parameters('labVnetId'), '/')]",
+    "labVnetName": "[variables('vnetNameSegments')[sub(length(variables('vnetNameSegments')), 1)]]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('rgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-storage",
+      "resourceGroup": "[variables('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[variables('storageAccountName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "shareName": {
+            "value": "[variables('shareName')]"
+          },
+          "shareQuotaGiB": {
+            "value": "[parameters('shareQuotaGiB')]"
+          },
+          "tags": {
+            "value": "[variables('commonTags')]"
+          },
+          "enableADDS": {
+            "value": "[parameters('enableADDS')]"
+          },
+          "adDomainName": {
+            "value": "[parameters('adDomainName')]"
+          },
+          "adNetBiosDomainName": {
+            "value": "[parameters('adNetBiosDomainName')]"
+          },
+          "adForestName": {
+            "value": "[parameters('adForestName')]"
+          },
+          "adDomainGuid": {
+            "value": "[parameters('adDomainGuid')]"
+          },
+          "adDomainSid": {
+            "value": "[parameters('adDomainSid')]"
+          },
+          "adAzureStorageSid": {
+            "value": "[parameters('adAzureStorageSid')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "13169060710644649367"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Globally unique storage account name"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "shareName": {
+              "type": "string",
+              "defaultValue": "artifacts",
+              "metadata": {
+                "description": "Name of the Azure Files share"
+              }
+            },
+            "shareQuotaGiB": {
+              "type": "int",
+              "defaultValue": 100,
+              "metadata": {
+                "description": "Share quota in GiB"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            },
+            "enableADDS": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Enable on-premises AD DS authentication for SMB file shares"
+              }
+            },
+            "enableEntraKerberos": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Enable Entra ID Kerberos authentication for SMB file shares (alternative to AD DS)"
+              }
+            },
+            "adDomainName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD domain FQDN (e.g., azlab.local) — used for both AD DS and Entra Kerberos modes"
+              }
+            },
+            "adNetBiosDomainName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD NetBIOS domain name (e.g., AZLAB)"
+              }
+            },
+            "adForestName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD forest name (e.g., azlab.local)"
+              }
+            },
+            "adDomainGuid": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD domain GUID"
+              }
+            },
+            "adDomainSid": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD domain SID (e.g., S-1-5-21-...)"
+              }
+            },
+            "adAzureStorageSid": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "SID of the computer account created in AD for this storage account"
+              }
+            },
+            "entraIdTenantId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Entra ID tenant GUID (used as domain GUID for Entra Kerberos)"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "properties": {
+                "supportsHttpsTrafficOnly": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": false,
+                "defaultToOAuthAuthentication": true,
+                "publicNetworkAccess": "Disabled",
+                "networkAcls": {
+                  "defaultAction": "Deny",
+                  "bypass": "AzureServices"
+                },
+                "azureFilesIdentityBasedAuthentication": "[if(parameters('enableEntraKerberos'), createObject('directoryServiceOptions', 'AADKERB', 'activeDirectoryProperties', createObject('domainName', parameters('adDomainName'), 'domainGuid', parameters('entraIdTenantId')), 'defaultSharePermission', 'StorageFileDataSmbShareContributor'), if(parameters('enableADDS'), createObject('directoryServiceOptions', 'AD', 'activeDirectoryProperties', createObject('domainName', parameters('adDomainName'), 'netBiosDomainName', parameters('adNetBiosDomainName'), 'forestName', parameters('adForestName'), 'domainGuid', parameters('adDomainGuid'), 'domainSid', parameters('adDomainSid'), 'azureStorageSid', parameters('adAzureStorageSid')), 'defaultSharePermission', 'StorageFileDataSmbShareContributor'), null()))]"
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('shareName'))]",
+              "properties": {
+                "shareQuota": "[parameters('shareQuotaGiB')]",
+                "enabledProtocols": "SMB"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', parameters('storageAccountName'), 'default')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "storageAccountId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+            },
+            "storageAccountName": {
+              "type": "string",
+              "value": "[parameters('storageAccountName')]"
+            },
+            "fileShareName": {
+              "type": "string",
+              "value": "[parameters('shareName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-pe-files",
+      "resourceGroup": "[variables('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgName')), 'Microsoft.Resources/deployments', 'deploy-storage'), '2025-04-01').outputs.storageAccountId.value]"
+          },
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgName')), 'Microsoft.Resources/deployments', 'deploy-storage'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "subnetId": {
+            "value": "[parameters('peSubnetId')]"
+          },
+          "vnetId": {
+            "value": "[parameters('labVnetId')]"
+          },
+          "vnetLinkName": {
+            "value": "[format('link-{0}', variables('labVnetName'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('commonTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "4476408876748287294"
+            }
+          },
+          "parameters": {
+            "storageAccountId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the storage account"
+              }
+            },
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the storage account (used for PE naming)"
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet resource ID for the private endpoint"
+              }
+            },
+            "vnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "VNet resource ID to link the private DNS zone to"
+              }
+            },
+            "vnetLinkName": {
+              "type": "string",
+              "metadata": {
+                "description": "Display name for the VNet link in the private DNS zone"
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags"
+              }
+            }
+          },
+          "variables": {
+            "privateDnsZoneName": "[format('privatelink.file.{0}', environment().suffixes.storage)]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2024-06-01",
+              "name": "[variables('privateDnsZoneName')]",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2024-06-01",
+              "name": "[format('{0}/{1}', variables('privateDnsZoneName'), parameters('vnetLinkName'))]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "virtualNetwork": {
+                  "id": "[parameters('vnetId')]"
+                },
+                "registrationEnabled": false
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-pe-file', parameters('storageAccountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('subnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('{0}-plsc-file', parameters('storageAccountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "file"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/{1}', format('{0}-pe-file', parameters('storageAccountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "privatelink-file",
+                    "properties": {
+                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "privateEndpointId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName')))]"
+            },
+            "privateEndpointIp": {
+              "type": "string",
+              "value": "[if(and(greater(length(reference(resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs), 0), greater(length(reference(resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs[0].ipAddresses), 0)), reference(resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs[0].ipAddresses[0], 'pending')]"
+            },
+            "dnsZoneId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgName'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgName')), 'Microsoft.Resources/deployments', 'deploy-storage')]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('deployerObjectId')))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-rbac",
+      "resourceGroup": "[variables('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgName')), 'Microsoft.Resources/deployments', 'deploy-storage'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "principalId": {
+            "value": "[parameters('deployerObjectId')]"
+          },
+          "principalType": {
+            "value": "[parameters('principalType')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "10685913206595606002"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the storage account to scope the role to"
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure AD object ID of the user or group"
+              }
+            },
+            "principalType": {
+              "type": "string",
+              "defaultValue": "User",
+              "allowedValues": [
+                "User",
+                "Group"
+              ],
+              "metadata": {
+                "description": "Principal type: User or Group"
+              }
+            }
+          },
+          "variables": {
+            "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69566ab7-960f-475b-8e7c-b3118f30c6bd')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('principalId'), '69566ab7-960f-475b-8e7c-b3118f30c6bd')]",
+              "properties": {
+                "roleDefinitionId": "[variables('roleDefinitionId')]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "[parameters('principalType')]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgName'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgName')), 'Microsoft.Resources/deployments', 'deploy-storage')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[variables('rgName')]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgName')), 'Microsoft.Resources/deployments', 'deploy-storage'), '2025-04-01').outputs.storageAccountName.value]"
+    },
+    "fileShareName": {
+      "type": "string",
+      "value": "[variables('shareName')]"
+    },
+    "privateEndpointIp": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgName')), 'Microsoft.Resources/deployments', 'deploy-pe-files'), '2025-04-01').outputs.privateEndpointIp.value]"
+    }
+  }
+}

@@ -3,6 +3,7 @@
 //
 // Deploys a modular Azure lab environment across 3 tiers:
 //   Tier 1: Core networking, AD Domain Controllers, Azure Bastion, Cloud Witness
+//          Optional: Entra Connect Sync + Management VM (hybrid identity)
 //   Tier 2: SQL Server VMs (5 total) including AOAG pair at Site 2 with ILB
 //   Tier 3: Application VMs (CAS + 3 child primaries)
 //
@@ -47,10 +48,33 @@ param deployerObjectId string = ''
 @allowed(['User', 'Group'])
 param kvPrincipalType string = 'User'
 
+// --- Entra ID Integration (Hybrid Identity) ---------------------------------
+
+@description('Enable Entra ID hybrid identity integration (Entra Connect Sync, Management VM with Entra ID login)')
+param enableEntraIntegration bool = false
+
+@description('Entra ID tenant domain (e.g., usaavd.com). Required when enableEntraIntegration is true.')
+param entraIdDomain string = ''
+
+@description('AD domain naming strategy: subdomain = AD domain is ad.{entraIdDomain}, independent = AD domain is separate with UPN suffix added')
+@allowed(['subdomain', 'independent'])
+param domainStrategy string = 'subdomain'
+
+@description('Where to install Entra Connect: dedicated = new VM, dc02 = install on DC02')
+@allowed(['dedicated', 'dc02'])
+param entraConnectPlacement string = 'dedicated'
+
+@description('VM name: Entra Connect Sync Server')
+@maxLength(15)
+param vmNameEntraConnect string = '${baseName}-entr'
+
 // --- VM Sizes ----------------------------------------------------------------
 
 @description('VM size for Domain Controllers')
 param sizeDC string = 'Standard_D2s_v5'
+
+@description('VM size for Management and Entra Connect VMs')
+param sizeManagement string = 'Standard_D2s_v5'
 
 @description('VM size for MCM site servers (when SQL is separate)')
 param sizeApp string = 'Standard_D4s_v5'
@@ -63,6 +87,12 @@ param sizeSQL string = 'Standard_D4s_v5'
 
 @description('VM size for AOAG SQL VMs (Site 2 — PrimC)')
 param sizeSQLAoag string = 'Standard_D8s_v5'
+
+// --- Disk SKUs ---------------------------------------------------------------
+
+@description('OS disk storage type for all VMs')
+@allowed(['Premium_LRS', 'StandardSSD_LRS', 'Standard_LRS'])
+param osDiskSku string = 'Premium_LRS'
 
 // --- Network CIDRs -----------------------------------------------------------
 
@@ -103,8 +133,19 @@ param dc01Ip string = '10.0.1.4'
 @description('Static IP for DC02')
 param dc02Ip string = '10.0.1.5'
 
+@description('Static IP for Entra Connect server')
+param entraConnectIp string = '10.0.1.6'
+
 @description('AOAG Listener IP (ILB frontend) in Site 2 subnet')
 param aoagListenerIp string = '10.0.40.10'
+
+// --- Private DNS Zone Reuse --------------------------------------------------
+
+@description('Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone).')
+param existingFileDnsZoneId string = ''
+
+@description('Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the Key Vault PE skips DNS zone and VNet link creation to avoid conflicts.')
+param existingKvDnsZoneId string = ''
 
 // --- OS Image ----------------------------------------------------------------
 
@@ -207,6 +248,11 @@ var effectiveAppSize = colocateSql ? sizeAppColocated : sizeApp
 // Domain join credential — uses svc-domjoin created by configureAD.bicep
 var domainJoinUser = 'svc-domjoin@${domainName}'
 
+// Entra integration — deploy Entra Connect VM only in dedicated placement mode
+var deployEntraConnectVm = enableEntraIntegration && entraConnectPlacement == 'dedicated'
+// Entra Connect target VM name (dedicated VM or DC02)
+var entraConnectTargetVm = entraConnectPlacement == 'dedicated' ? vmNameEntraConnect : dc02Name
+
 // =============================================================================
 // Resource Groups (all tiers — created upfront for idempotency)
 // =============================================================================
@@ -247,6 +293,16 @@ resource rgSite2Res 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 
 // --- VNet & Subnets ----------------------------------------------------------
 
+module natGateway 'modules/network/natGateway.bicep' = {
+  name: 'deploy-natgw'
+  scope: rgNet
+  params: {
+    natGatewayName: '${baseName}-natgw'
+    location: location
+    tags: union(commonTags, { workload: 'network' })
+  }
+}
+
 module vnet 'modules/network/vnet.bicep' = {
   name: 'deploy-vnet'
   scope: rgNet
@@ -260,6 +316,7 @@ module vnet 'modules/network/vnet.bicep' = {
     snetSite1Prefix: snetSite1Prefix
     snetSite2Prefix: snetSite2Prefix
     snetGatewayPrefix: snetGatewayPrefix
+    natGatewayId: natGateway.outputs.natGatewayId
     dnsServers: [dc01Ip, dc02Ip]
     tags: union(commonTags, { workload: 'network' })
   }
@@ -309,7 +366,25 @@ module keyVault 'modules/security/keyVault.bicep' = {
   }
 }
 
-// --- Cloud Witness Storage Account -------------------------------------------
+// --- Key Vault Private Endpoint (disables public access) ---------------------
+
+module keyVaultPe 'modules/security/keyVaultPrivateEndpoint.bicep' = {
+  name: 'deploy-keyvault-pe'
+  scope: rgNet
+  params: {
+    keyVaultId: keyVault.outputs.keyVaultId
+    keyVaultName: keyVault.outputs.keyVaultName
+    subnetId: vnet.outputs.snetPeId
+    vnetId: vnet.outputs.vnetId
+    existingPrivateDnsZoneId: existingKvDnsZoneId
+    location: location
+    tags: union(commonTags, { workload: 'secrets' })
+  }
+}
+
+// --- File Share Witness Storage Account (WSFC Quorum) ------------------------
+// Deploys a locked-down Azure Files share for WSFC File Share Witness.
+// AD DS registration is a post-deployment step — see README Section 6.
 
 module cloudWitness 'modules/storage/storageAccount.bicep' = {
   name: 'deploy-cloud-witness'
@@ -318,7 +393,23 @@ module cloudWitness 'modules/storage/storageAccount.bicep' = {
     namePrefix: 'stgcw'
     location: location
     skuName: 'Standard_LRS'
-    tags: union(commonTags, { workload: 'cloud-witness' })
+    shareName: 'witness'
+    shareQuotaGiB: 5
+    tags: union(commonTags, { workload: 'file-share-witness' })
+  }
+}
+
+module cloudWitnessPe 'modules/storage/storagePrivateEndpoint.bicep' = {
+  name: 'deploy-cloud-witness-pe'
+  scope: rgNet
+  params: {
+    storageAccountId: cloudWitness.outputs.storageAccountId
+    storageAccountName: cloudWitness.outputs.storageAccountName
+    subnetId: vnet.outputs.snetPeId
+    vnetId: vnet.outputs.vnetId
+    existingPrivateDnsZoneId: existingFileDnsZoneId
+    location: location
+    tags: union(commonTags, { workload: 'file-share-witness' })
   }
 }
 
@@ -338,6 +429,7 @@ module dc01 'modules/compute/vm.bicep' = {
     imageOffer: imageOffer
     imageSku: imageSku
     privateIpAddress: dc01Ip
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -356,6 +448,7 @@ module dc02 'modules/compute/vm.bicep' = {
     imageOffer: imageOffer
     imageSku: imageSku
     privateIpAddress: dc02Ip
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -381,13 +474,36 @@ module promoteDc01 'modules/identity/promoteDC.bicep' = {
 module configureAd 'modules/identity/configureAD.bicep' = {
   name: 'deploy-configure-ad'
   scope: rgId
-  dependsOn: [promoteDc01]
+  dependsOn: [promoteDc01, promoteDc02]
   params: {
     vmName: dc01Name
     location: location
     domainName: domainName
     svcAccountPassword: adminPassword
+    entraIdDomain: entraIdDomain
+    domainStrategy: domainStrategy
     tags: union(commonTags, { role: 'domain-controller' })
+  }
+}
+
+// --- Entra Connect Sync Server (dedicated VM, Tier 1) ------------------------
+
+module entraConnectVm 'modules/compute/vm.bicep' = if (deployEntraConnectVm) {
+  name: 'deploy-entra-connect'
+  scope: rgId
+  params: {
+    vmName: vmNameEntraConnect
+    location: location
+    vmSize: sizeManagement
+    subnetId: vnet.outputs.snetAdId
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: entraConnectIp
+    osDiskSku: osDiskSku
+    tags: union(commonTags, { role: 'entra-connect' })
   }
 }
 
@@ -406,6 +522,36 @@ module promoteDc02 'modules/identity/replicaDC.bicep' = {
     adminPassword: adminPassword
     dsrmPassword: adminPassword
     tags: union(commonTags, { role: 'domain-controller' })
+  }
+}
+
+// --- Domain Join: Entra Connect VM (always joined -- Entra Connect requires AD membership)
+
+module djEntraConnect 'modules/identity/domainJoin.bicep' = if (deployEntraConnectVm) {
+  name: 'deploy-dj-entra-connect'
+  scope: rgId
+  dependsOn: [entraConnectVm, configureAd, promoteDc02]
+  params: {
+    vmName: vmNameEntraConnect
+    location: location
+    domainName: domainName
+    domainJoinUser: domainJoinUser
+    domainJoinPassword: adminPassword
+    ouPath: 'OU=App Servers,OU=Lab Servers,${domainDN}'
+    tags: union(commonTags, { role: 'domain-join' })
+  }
+}
+
+// --- Install Entra Connect Sync on target VM ---------------------------------
+
+module installEntraConnect 'modules/identity/entraConnect.bicep' = if (enableEntraIntegration) {
+  name: 'deploy-install-entra-connect'
+  scope: rgId
+  dependsOn: deployEntraConnectVm ? [djEntraConnect] : [promoteDc02]
+  params: {
+    vmName: entraConnectTargetVm
+    location: location
+    tags: union(commonTags, { role: 'entra-connect' })
   }
 }
 
@@ -461,6 +607,7 @@ module sqlCas 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateS
     dataDiskCount: 2
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -483,6 +630,7 @@ module sqlPrima 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskCount: 2
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -505,6 +653,7 @@ module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskCount: 2
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server', site: 'site1' })
   }
 }
@@ -529,6 +678,7 @@ module sqlPrimc01 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
     dataDiskSku: 'Premium_LRS'
     availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
     loadBalancerBackendPoolId: ilb.outputs.backendPoolId
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '1' })
   }
 }
@@ -553,6 +703,7 @@ module sqlPrimc02 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
     dataDiskSku: 'Premium_LRS'
     availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
     loadBalancerBackendPoolId: ilb.outputs.backendPoolId
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '2' })
   }
 }
@@ -657,6 +808,7 @@ module casVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskCount: colocateSql ? 2 : 0
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: colocateSql ? 'cas-sql' : 'cas', site: 'main' })
   }
 }
@@ -679,6 +831,7 @@ module primaVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskCount: colocateSql ? 2 : 0
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'main' })
   }
 }
@@ -701,6 +854,7 @@ module primbVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskCount: colocateSql ? 2 : 0
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'site1' })
   }
 }
@@ -720,6 +874,7 @@ module primcVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     imagePublisher: imagePublisher
     imageOffer: imageOffer
     imageSku: imageSku
+    osDiskSku: osDiskSku
     tags: union(commonTags, { role: 'child-primary', site: 'site2' })
   }
 }
@@ -801,6 +956,7 @@ output resourceGroups object = {
 output vnetId string = vnet.outputs.vnetId
 output bastionName string = bastion.outputs.bastionName
 output cloudWitnessStorageAccount string = cloudWitness.outputs.storageAccountName
+output cloudWitnessFileShareName string = cloudWitness.outputs.fileShareName
 output keyVaultName string = keyVault.outputs.keyVaultName
 output keyVaultSecretName string = keyVault.outputs.secretName
 
@@ -810,3 +966,5 @@ output dc02PrivateIp string = dc02.outputs.privateIpAddress
 output vpnGatewayName string = !empty(vpnRootCertData) ? vpnGateway.outputs.vpnGatewayName : 'not-deployed'
 
 output deploymentTierDeployed int = deploymentTier
+output entraIntegrationEnabled bool = enableEntraIntegration
+output entraConnectVmName string = deployEntraConnectVm ? entraConnectVm.outputs.vmName : (enableEntraIntegration ? dc02Name : 'not-deployed')

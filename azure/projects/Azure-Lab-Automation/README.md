@@ -13,14 +13,19 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 │  ┌─────────────────────┐  ┌────────────────────────────────────────────┐ │
 │  │ AzureBastionSubnet  │  │ snet-ad (10.0.1.0/24)                     │ │
 │  │ 10.0.0.0/26         │  │   DC01 (10.0.1.4)  DC02 (10.0.1.5)       │ │
-│  │   Azure Bastion     │  │                                            │ │
+│  │   Azure Bastion     │  │   EntraConnect*     MgmtVM*               │ │
 │  └─────────────────────┘  └────────────────────────────────────────────┘ │
 │                                                                          │
 │  ┌─────────────────────┐  ┌────────────────────────────────────────────┐ │
-│  │ GatewaySubnet       │  │ P2S VPN Client Pool: 172.16.0.0/24        │ │
-│  │ 10.0.255.0/27       │  │   IKEv2 + SSTP — Certificate Auth          │ │
-│  │   VPN Gateway       │  │   Self-signed root + client cert           │ │
+│  │ GatewaySubnet       │  │ snet-pe (10.0.250.0/24)                   │ │
+│  │ 10.0.255.0/27       │  │   Key Vault PE    (+ future PEs)          │ │
+│  │   VPN Gateway       │  │                                            │ │
 │  └─────────────────────┘  └────────────────────────────────────────────┘ │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │ P2S VPN Client Pool: 172.16.0.0/24                                 │ │
+│  │   IKEv2 + SSTP — Certificate Auth  |  Self-signed root + client    │ │
+│  └─────────────────────────────────────────────────────────────────────┘ │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────────┐│
 │  │ snet-main (10.0.20.0/24)  — Main Site / HQ                         ││
@@ -36,14 +41,16 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 │  │ snet-site2 (10.0.40.0/24)  — Remote Site 2 (AOAG)                  ││
 │  │   PrimaryC        SQL-PrimC01 ──┐                                   ││
 │  │                   SQL-PrimC02 ──┤ AOAG + ILB Listener (10.0.40.10) ││
-│  │                                 │ Cloud Witness (Storage Acct)      ││
+│  │                                 │ File Share Witness (Azure Files)  ││
 │  └──────────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+> **\*** *EntraConnect is deployed only when `enableEntraIntegration=true` and `entraConnectPlacement='dedicated'` (otherwise Entra Connect installs on DC02). MgmtVM is deployed separately via `deploy-mgmt.ps1` after the main lab deployment completes.*
+
 ### VM Inventory
 
-The lab deploys up to **11 VMs** (or fewer with `colocateSql`).
+The lab deploys up to **11 VMs** (or fewer with `colocateSql`), plus up to **2 additional VMs** when Entra ID integration is enabled.
 All MCM and SQL VM names are **customizable** at deploy time via an interactive naming prompt or Bicep parameters.
 
 #### Default Layout — Separate SQL (11 VMs)
@@ -61,6 +68,17 @@ All MCM and SQL VM names are **customizable** at deploy time via an interactive 
 | `{base}-prma` | MCM Child Primary A | Standard_D4s_v5 | snet-main | 3 |
 | `{base}-prmb` | MCM Child Primary B | Standard_D4s_v5 | snet-site1 | 3 |
 | `{base}-prmc` | MCM Child Primary C | Standard_D4s_v5 | snet-site2 | 3 |
+
+**Entra ID Integration VMs** (deployed when `enableEntraIntegration=true`):
+
+| Default Name | Role | Size | Subnet | Tier |
+|--------------|------|------|--------|------|
+| `{base}-entr` | Entra Connect Sync* | Standard_D2s_v5 | snet-ad | 1 |
+| `{base}-mgmt` | Management VM (Entra ID joined)** | Standard_D2s_v5 | snet-ad | Post |
+
+\* Only deployed when `entraConnectPlacement='dedicated'`. Otherwise Entra Connect installs on DC02.
+
+\*\* Deployed separately via `deploy-mgmt.ps1` after the main lab is running.
 
 #### Colocated SQL Layout — SQL on MCM Servers (8 VMs)
 
@@ -89,6 +107,15 @@ When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as
 | **Bicep CLI** | (bundled with Az CLI) | `az bicep version` |
 | **Azure Subscription** | — | `az account list -o table` |
 | **RBAC** | Contributor on subscription | `az role assignment list --assignee <upn>` |
+
+### Entra ID Integration Prerequisites (optional)
+
+| Requirement | Notes |
+|-------------|-------|
+| **Entra ID tenant** | Any tenant — the code is not tied to a specific domain |
+| **Azure AD Premium P2 license** | Required for Entra Connect Sync + Entra ID device login |
+| **Global Administrator** | Needed during the Entra Connect wizard (post-deployment) |
+| **Custom domain (recommended)** | Register your domain in Entra ID → Custom domain names |
 
 ### VM Quota Requirements
 
@@ -140,8 +167,8 @@ The deployment uses a **tiered** approach so you can deploy incrementally:
 
 | Tier | What Gets Deployed | Use Case |
 |------|-------------------|----------|
-| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), Cloud Witness Storage, Key Vault, **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
-| **2** | + SQL VMs (with data disks), Availability Set, Internal Load Balancer. Standalone SQL VMs are skipped when `colocateSql` is true — only AOAG nodes are deployed. **Auto domain-join** SQL VMs (unless `joinDomain=false`). | Add SQL infrastructure |
+| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), File Share Witness Storage (Azure Files + PE — no public access, shared keys disabled), Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
+| **2** | + SQL VMs (with data disks), Availability Set, Internal Load Balancer. Standalone SQL VMs are skipped when `colocateSql` is true — only AOAG nodes are deployed. **Auto domain-join** SQL VMs (unless `joinDomain=false`). **Auto-registers File Share Witness storage account in AD** for Kerberos SMB (WSFC quorum). | Add SQL infrastructure |
 | **3** | + MCM Application VMs (CAS + 3 child primaries). When `colocateSql` is true, MCM VMs are upsized and get data disks for SQL. **Auto domain-join** MCM VMs (unless `joinDomain=false`). | Full lab deployment |
 
 Each tier is **cumulative** — Tier 3 includes everything from Tiers 1 and 2.
@@ -152,6 +179,7 @@ You can deploy Tier 1 first, then **incrementally** deploy Tier 2 or 3 later. Th
 
 - **Auto-detects** existing Tier 1 infrastructure (resource groups, Key Vault, DCs)
 - **Reuses** the admin password from Key Vault (prevents DC extension re-execution)
+  - **Note:** Key Vault has no public endpoint — connect via VPN before running incremental deploys
 - **Auto-detects** the AD domain name from DC01 (no need to re-enter it)
 - **Skips** Key Vault RBAC prompts on incremental runs
 - **Validates** the Azure CLI token before deployment (re-authenticates if expired)
@@ -205,6 +233,15 @@ cd "Azure Lab"
 # Preview changes without deploying
 .\deploy.ps1 -BaseName azlab -Location eastus -WhatIf
 
+# Deploy with Entra ID hybrid identity integration
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -EnableEntraIntegration -EntraIdDomain contoso.com
+
+# Deploy with Entra Connect on a dedicated VM (default: installs on DC02)
+.\deploy.ps1 -BaseName azlab -Location eastus -EnableEntraIntegration -EntraIdDomain contoso.com -EntraConnectPlacement dedicated
+
+# Deploy with independent AD domain (not a subdomain of Entra ID domain)
+.\deploy.ps1 -BaseName azlab -Location eastus -EnableEntraIntegration -EntraIdDomain contoso.com -DomainStrategy independent -DomainName azlab.local
+
 # Deploy to a specific subscription
 .\deploy.ps1 -BaseName azlab -Location eastus -SubscriptionId "00000000-0000-0000-0000-000000000000"
 ```
@@ -216,6 +253,7 @@ The script will:
   - Auto-detect existing infrastructure and reuse the admin password from Key Vault
   - Auto-detect the AD domain name from DC01 (or accept `-DomainName` parameter)
   - Skip Key Vault RBAC prompts
+- **Auto-detect existing private DNS zones** (`privatelink.file`, `privatelink.vaultcore`) linked to the lab VNet — reuses them instead of creating duplicates (avoids conflicts when ArtifactsStorage or other add-on projects deployed first)
 - Prompt for Key Vault Administrator (user UPN or Entra ID group) — first deployment only
 - Compile and validate the Bicep template
 - Auto-generate a secure admin password (stored in Key Vault) — first deployment only
@@ -224,7 +262,7 @@ The script will:
 - Display an **interactive naming table** for MCM/SQL servers — accept defaults or customize
 - Offer the option to **colocate SQL on MCM servers** (or pass `-ColocateSql`)
 - Prompt to **domain-join** SQL and MCM VMs (default: yes) — or pass `-SkipDomainJoin`
-- Generate self-signed root CA + client certificates for VPN (P2S)
+- Check the personal certificate store for existing VPN certs (by BaseName); generate new ones if not found
 - Refresh the Azure CLI token before deploying
 - Execute the deployment
 - **Post-deployment**: Set VM timezone via RunCommand (`Set-TimeZone`) on all deployed VMs
@@ -280,13 +318,17 @@ az deployment sub show --name <deployment-name> --query properties.outputs
 Azure-Lab/
 ├── README.md                              # This file
 ├── deploy.ps1                             # PowerShell wrapper (prereqs, incremental detection, naming, deploy)
+├── deploy-mgmt.ps1                        # Standalone: deploy management VM (Entra ID joined)
+├── Register-WitnessStorage.ps1            # Standalone: register witness storage account in AD
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
-├── main.bicep                             # Subscription-scoped orchestrator
+├── Set-VpnDnsConfig.ps1                   # Helper: configure DNS NRPT rules for VPN private endpoint access
+├── main.bicep                             # Subscription-scoped orchestrator (AD lab infrastructure)
+├── mgmt.bicep                             # Resource-group-scoped: management VM + Entra ID join
 ├── bicepconfig.json                       # Bicep linter / analyzer config
 ├── MECM-Azure-Global-Lab.ps1              # Original PowerShell script (reference)
 ├── certs/                                 # Auto-generated VPN certificates
-│   ├── P2SRootCert.cer                    # Root CA public key (reused on redeploy)
-│   ├── P2SClientCert.pfx                  # Client cert (password = admin password)
+│   ├── P2SRootCert.cer                    # Root CA public key (re-exported every deploy)
+│   ├── P2SClientCert.pfx                  # Client cert (re-exported with current admin password)
 │   └── vpn-client/                        # Downloaded VPN client config (from helper script)
 ├── parameters/
 │   └── main.bicepparam                    # Default parameter values (for direct az CLI use)
@@ -300,16 +342,25 @@ Azure-Lab/
     │   ├── availabilitySet.bicep           # Availability Set for AOAG SQL nodes
     │   └── loadBalancer.bicep              # Internal Load Balancer for AOAG listener
     ├── storage/
-    │   └── storageAccount.bicep           # Cloud Witness storage account
+    │   ├── storageAccount.bicep           # File Share Witness storage account (Azure Files + AD DS auth)
+    │   └── storagePrivateEndpoint.bicep   # Storage PE + private DNS zone (privatelink.file)
     ├── security/
-    │   └── keyVault.bicep                 # Key Vault (password storage + RBAC assignment)
+    │   ├── keyVault.bicep                 # Key Vault (password storage + RBAC assignment)
+    │   └── keyVaultPrivateEndpoint.bicep   # Key Vault PE + private DNS zone
     └── identity/
         ├── promoteDC.bicep                # CSE: Promote DC01 as first DC (new forest)
         ├── configureAD.bicep              # RunCommand: OUs, groups, svc accounts, gMSA
         ├── replicaDC.bicep                # CSE: Promote DC02 as replica DC
         ├── domainJoin.bicep               # JsonADDomainExtension: join VM to AD domain
+        ├── entraConnect.bicep             # RunCommand: Install Entra Connect Sync
+        ├── entraIdJoin.bicep              # AADLoginForWindows extension (Entra ID join)
+        ├── managementTools.bicep          # RunCommand: Install RSAT, Az module, Azure CLI
+        ├── vmLoginRbac.bicep              # RBAC: Virtual Machine Administrator Login
         └── scripts/
-            └── Configure-AD.ps1           # AD configuration script (loaded inline)
+            ├── Configure-AD.ps1           # AD configuration script (loaded inline)
+            ├── Install-EntraConnect.ps1   # Download + silent install Entra Connect
+            ├── Install-ManagementTools.ps1 # RSAT, Az module, SqlServer, Azure CLI
+            └── Register-StorageInAD.ps1   # Register storage account in AD for Kerberos SMB
 ```
 
 ---
@@ -330,6 +381,10 @@ Azure-Lab/
 | `-SubscriptionId` | string | (current) | Target Azure subscription ID |
 | `-WhatIf` | switch | `$false` | Preview deployment changes without applying |
 | `-Destroy` | switch | `$false` | Delete all lab resource groups |
+| `-EnableEntraIntegration` | switch | `$false` | Enable Entra ID hybrid identity (Entra Connect, management VM, Entra ID join) |
+| `-EntraIdDomain` | string | (prompt) | Entra ID verified domain (e.g., `contoso.com`) |
+| `-DomainStrategy` | string | `subdomain` | `subdomain` = AD domain is `ad.<EntraIdDomain>`, `independent` = AD domain configured separately |
+| `-EntraConnectPlacement` | string | `dc02` | `dc02` = install Entra Connect on DC02, `dedicated` = deploy a separate Entra Connect VM |
 
 ### Bicep Template Parameters (main.bicep)
 
@@ -377,6 +432,17 @@ Azure-Lab/
 | `imageOffer` | string | `WindowsServer` | OS image offer |
 | `imageSku` | string | `2022-datacenter-g2` | OS image SKU |
 | `envTag` | string | `lab` | Environment tag value |
+| **Private DNS Zone Reuse** | | | |
+| `existingFileDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.file` DNS zone (auto-detected by `deploy.ps1`) |
+| `existingKvDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.vaultcore` DNS zone (auto-detected by `deploy.ps1`) |
+| **Entra ID Integration** | | | |
+| `enableEntraIntegration` | bool | `false` | Enable Entra ID hybrid identity features |
+| `entraIdDomain` | string | `''` | Entra ID verified domain (e.g., `contoso.com`) |
+| `domainStrategy` | string | `subdomain` | `subdomain` = AD domain is `ad.<entraIdDomain>`, `independent` = separate names |
+| `entraConnectPlacement` | string | `dc02` | `dc02` = install on DC02, `dedicated` = separate VM |
+| `vmNameMgmt` | string | `{base}-mgmt` | Management VM name (Entra ID joined) |
+| `vmNameEntraConnect` | string | `{base}-entr` | Entra Connect VM name (when placement = dedicated) |
+| `sizeManagement` | string | `Standard_D2s_v5` | VM size for Management VM and Entra Connect VM |
 
 ---
 
@@ -391,7 +457,7 @@ After infrastructure deployment, the following manual configuration is required:
 ### 1b. Connect via P2S VPN (Deploying Machine)
 The VPN Gateway takes **25–45 minutes** to provision after deployment starts.
 1. **Download VPN client config**: Portal → `{baseName}-vpngw` → Point-to-site configuration → Download VPN client
-2. **Client cert**: Already installed in `CurrentUser\My` during deployment (auto-generated)
+2. **Client cert**: Already installed in `CurrentUser\My` during deployment (looked up by BaseName or auto-generated)
 3. **Root cert**: Added to `CurrentUser\Trusted Root Certification Authorities` automatically
 4. **Connect**: Extract the downloaded ZIP, run the VPN client configuration, then connect via Windows VPN settings
 5. **VPN address**: Your workstation will receive a `172.16.0.x` IP with full access to the `10.0.0.0/16` lab network
@@ -408,27 +474,66 @@ To connect from a workstation that was **not** used to run `deploy.ps1`, use the
 3. The script will:
    - Import the root CA into `CurrentUser\Trusted Root Certification Authorities`
    - Import the client PFX into `CurrentUser\My` (prompts for the PFX password)
-   - Download the VPN client configuration from Azure (requires Az CLI)
-   - Extract and optionally open the VPN client installer folder
-4. **PFX password**: This is the admin password from Key Vault. Retrieve it with:
+4. **Download the VPN client configuration** manually from the Azure Portal:
+   `{baseName}-vpngw` → Point-to-site configuration → Download VPN client
+5. **PFX password**: This is the admin password from Key Vault. Retrieve it with:
    ```bash
    az keyvault secret show --vault-name {baseName}-kv --name vm-admin-password --query value -o tsv
    ```
-5. **Without Az CLI**: Use `-SkipVpnClientDownload` and download the VPN client manually from the Azure Portal
 
 > **Tip:** You can connect multiple machines — just copy the `certs/` folder and run `Install-VpnCerts.ps1` on each one.
+
+### 1d. VPN DNS Configuration (Private Endpoints)
+
+When connected to the P2S VPN, your workstation may still use its **local DNS** (e.g., your home router) instead of the Azure DCs. This causes private endpoint resolution to fail — resources like Key Vault return public IPs, and you get:
+
+> _"Public network access is disabled and request is not from a trusted service nor via an approved private link"_
+
+This happens because Windows routes DNS queries through the network adapter with the **lowest interface metric**, which is typically your local Ethernet/Wi-Fi — not the VPN adapter.
+
+The `Set-VpnDnsConfig.ps1` script solves this by managing **NRPT (Name Resolution Policy Table)** rules that route Azure Private DNS zone queries through the lab's Domain Controllers. A scheduled task automatically adds/removes these rules on VPN connect/disconnect.
+
+**Install (one-time, requires Admin PowerShell):**
+```powershell
+.\Set-VpnDnsConfig.ps1 -Action Install -BaseName tst10
+```
+
+This will:
+- Add NRPT rules for Azure Private DNS zones (`*.vault.azure.net`, `*.blob.core.windows.net`, etc.) pointing to the lab DCs (`10.0.1.4`, `10.0.1.5`)
+- Create a scheduled task that **automatically** adds the rules on VPN connect and removes them on disconnect
+- Rules are scoped — only private endpoint DNS zones are redirected; all other DNS continues through your normal resolver
+
+**Verify it's working:**
+```powershell
+# Resolve-DnsName respects NRPT rules (nslookup does NOT)
+Resolve-DnsName {baseName}-kv-*.vault.azure.net
+# Should return a 10.0.250.x address (private endpoint IP), not a public IP
+```
+
+**Uninstall:**
+```powershell
+.\Set-VpnDnsConfig.ps1 -Action Uninstall -BaseName tst10
+```
+
+**Custom DNS servers:** If your DCs use non-default IPs:
+```powershell
+.\Set-VpnDnsConfig.ps1 -Action Install -BaseName mylab -DnsServers 10.0.1.10,10.0.1.11
+```
+
+> **Note:** `nslookup` bypasses NRPT rules and always queries the adapter's DNS server directly. Use `Resolve-DnsName` to verify NRPT-based resolution. Applications (browsers, Az CLI, PowerShell modules) all use the NRPT path.
 
 ### 2. Active Directory (Automated)
 AD DS is automatically configured during Tier 1 deployment:
 - **DC01** promoted as the first domain controller in a new forest
 - **DC02** promoted as a replica domain controller
 - **VNet DNS** set to DC IPs (10.0.1.4, 10.0.1.5) at deployment time
-- **OUs**: Lab Accounts > Service Accounts, Lab Accounts > Admins, Lab Groups, Lab Servers > SQL Servers + App Servers
+- **OUs**: Lab Accounts > Service Accounts, Lab Accounts > Admins, Lab Groups, Lab Servers > SQL Servers + App Servers + Storage Accounts
 - **Security Groups**: GRP-DomainAdmins-Lab, GRP-SQLAdmins, GRP-AppAdmins, GRP-ServerAdmins, GRP-DomainJoin
 - **Service Accounts** (OU=Service Accounts): svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa
-- **Admin Accounts** (OU=Admins): mcm-admin (member of GRP-AppAdmins + GRP-DomainAdmins-Lab)
+- **Admin Accounts** (OU=Admins): lab-admin (delegated OU admin, member of GRP-ServerAdmins + GRP-SQLAdmins + GRP-AppAdmins + GRP-MCMAdmins), mcm-admin, sql-admin
 - **gMSA**: gmsa-sqlsvc (for SQL Server, retrieve principals: GRP-SQLAdmins)
 - **Domain-join delegation**: svc-domjoin has CreateChild + WriteProperty on CN=Computers
+- **OU delegation**: lab-admin has GenericAll on Lab Servers, Lab Accounts, Lab Groups OUs
 - **DNS Forwarder**: `168.63.129.16` (Azure-provided DNS) configured on both DCs so VMs can resolve public hostnames
 
 > **Note:** After DC promotion, VMs may need a restart to pick up the custom DNS settings. DCs reboot automatically after promotion.
@@ -443,6 +548,116 @@ By default, all SQL and MCM VMs are **automatically domain-joined** during deplo
 - The extension depends on AD configuration completing first (OUs and svc-domjoin must exist)
 
 If you deployed with `-SkipDomainJoin` (or `joinDomain=false`), VMs remain in a workgroup. You can domain-join them manually later using the `svc-domjoin` account.
+
+### 3a. Entra Connect Sync Setup (when `-EnableEntraIntegration`)
+
+Entra Connect is **installed automatically** during deployment, but the configuration wizard requires interactive Global Admin authentication. Use **Custom installation** (not Express) to configure OU filtering.
+
+#### Initial Configuration
+
+1. **Connect** to the Entra Connect VM (or DC02, depending on `entraConnectPlacement`) via Bastion
+2. **Launch** the Entra Connect wizard from the desktop shortcut
+3. **Accept** the license terms, click Continue
+4. **Click "Customize"** (not Express Settings) — this enables OU filtering
+5. **Install prerequisites**: Click "Install" (no optional components needed for the lab)
+6. **User Sign-in**: Select **"Password Hash Synchronization"**, click Next
+7. **Connect to Azure AD**: Sign in with an Entra ID **Global Administrator** account
+8. **Connect Directories**:
+   - Forest: `<domainName>` → click "Add Directory"
+   - Select "Create new AD account"
+   - Enter Enterprise Admin credentials: `<domain>\labadmin` with the admin password from Key Vault
+9. **Azure AD sign-in configuration**: Verify the UPN suffix is shown and configured, click Next
+   - **Subdomain mode** (`domainStrategy=subdomain`): AD domain is `ad.<entraIdDomain>` — the Entra ID domain should show as a verified UPN suffix
+   - **Independent mode** (`domainStrategy=independent`): The Entra ID domain was added as an alternate UPN suffix in AD — verify it shows as "Verified"
+10. **Domain and OU filtering**: Select **"Sync selected domains and OUs"**
+    - Uncheck all OUs, then check **only**:
+      - ☑ `Lab Accounts`
+      - ☑ `Lab Groups`
+      - ☑ `Lab Servers`
+11. **Uniquely identifying users**: Keep defaults (users are represented once, match by mail attribute), click Next
+12. **Filter users and devices**: Keep "Synchronize all users and devices", click Next
+13. **Optional features**: "Password hash synchronization" should already be checked
+    - No additional features are needed for the lab
+    - Optional: Check "Password writeback" if you want Entra ID SSPR to write back to AD
+14. **Click "Install"** to start configuration and initial sync
+15. **Wait** for synchronization to complete (typically 2–5 minutes)
+
+> **Verify sync**: Azure Portal → Entra ID → Users — you should see the synced AD accounts (lab-admin, mcm-admin, sql-admin, service accounts).
+
+#### Optional: Hybrid Entra ID Join (after initial sync)
+
+To allow domain-joined lab VMs to also register in Entra ID (hybrid join):
+
+1. Re-open the Entra Connect wizard → **Configure** → **Device options**
+2. Select **"Configure Hybrid Microsoft Entra ID join"**
+3. Authenticate with Global Administrator credentials
+4. Check **"Windows 10 or later domain-joined devices"**
+5. Select your forest → click **Configure** to set the SCP (Service Connection Point)
+6. Enter Enterprise Admin credentials when prompted
+7. Click **Configure** to apply
+
+After configuration, domain-joined VMs will automatically register in Entra ID on their next reboot or policy refresh.
+
+#### Artifacts Storage (Azure Files)
+
+Deploy the `ArtifactsStorage` project to create a private Azure Files share for ISOs, installers, and configuration files. Two authentication modes are available — choose based on your needs:
+
+**Option 1 — AD DS Registration (default, recommended for labs):**
+```powershell
+cd ../ArtifactsStorage
+.\deploy.ps1 -NamePrefix artifacts -Location <region> -LabBaseName <base>
+```
+- Registers the storage account as a computer object in AD (runs on DC01)
+- **All domain-joined VMs** (including DCs) can mount via `net use` — any domain user works
+- Management VM (Entra ID joined) accesses via `az storage file --auth-mode login` (OAuth)
+
+**Option 2 — Entra ID Kerberos (`-EnableEntraKerberos`):**
+```powershell
+.\deploy.ps1 -NamePrefix artifacts -Location <region> -LabBaseName <base> -EnableEntraKerberos
+```
+- No AD computer account created
+- **Requires**: PHS enabled in Entra Connect + Hybrid Entra ID Join on client VMs
+- SMB `net use` only works from Hybrid Entra ID joined VMs, logged in as a **synced user** (e.g., `lab-admin`)
+- **DCs cannot mount** via SMB (DCs cannot be hybrid joined) — use `az storage file --auth-mode login` instead
+- The built-in `labadmin` account (in `CN=Users`) is never synced and cannot mount via Kerberos
+- Management VM (Entra ID joined) accesses via `az storage file --auth-mode login` (OAuth)
+
+**Access summary by VM type:**
+
+| VM Type | AD DS mode (`net use`) | Entra Kerberos mode (`net use`) | OAuth (`az storage file --auth-mode login`) |
+|---------|----------------------|-------------------------------|-------------------------------------------|
+| Domain-joined VMs (SQL, MCM) | **Yes** — any domain user | **Only if** Hybrid Entra ID joined + synced user | Yes (with Az CLI + RBAC) |
+| Domain Controllers | **Yes** — any domain user | **No** — DCs cannot be hybrid joined | Yes (with Az CLI + RBAC) |
+| Management VM (Entra joined) | **No** — not domain-joined | **Yes** — has PRT, synced user | **Yes** — recommended path |
+| VPN workstation | **No** — not domain-joined | **No** — not domain/hybrid joined | **Yes** — recommended path |
+
+> **Recommendation**: Use AD DS registration for labs. It works with every domain-joined VM (including DCs) with zero extra config. The management VM and VPN workstations use `az storage file --auth-mode login` regardless of which mode is chosen.
+
+### 3b. Management VM (separate deployment)
+
+The Management VM (`{base}-mgmt`) is deployed **separately** via `deploy-mgmt.ps1` after the main lab deployment completes. This ensures the AD infrastructure (DCs, DNS forwarders) is fully operational before the Entra ID join is attempted.
+
+```powershell
+# Deploy the management VM after the main lab is running
+.\deploy-mgmt.ps1 -BaseName <base> -Location <region>
+```
+
+The script automatically retrieves the admin password from Key Vault. The VM is **pure Entra ID joined** (not AD domain-joined) via the `AADLoginForWindows` extension and comes pre-installed with:
+- **RSAT**: AD Users & Computers, DNS Manager, Group Policy Management
+- **Az PowerShell module**
+- **SqlServer PowerShell module**
+- **Azure CLI**
+
+**Login**: Connect via Bastion using your **Entra ID credentials** (the deployer is assigned the `Virtual Machine Administrator Login` role automatically).
+
+**Managing AD from a non-domain-joined VM**: The `lab-admin` account is created during AD configuration with delegated full control over the Lab OUs (`Lab Servers`, `Lab Accounts`, `Lab Groups`). It is **not** a Domain Admin — it has only the permissions needed to manage lab infrastructure. To use RSAT tools:
+
+```powershell
+# Launch AD Users & Computers with AD credentials
+runas /netonly /user:yourdomain.lab\lab-admin "mmc dsa.msc"
+```
+
+Alternatively, RSAT tools will prompt for credentials when you connect to a DC. The VNet DNS already points to the DCs (`10.0.1.4`, `10.0.1.5`), so AD is fully resolvable from the management VM.
 
 ### 4. VM Timezone (Automated)
 During deployment, the script prompts for a timezone (or accepts `-TimeZone`). After the Bicep deployment completes, the timezone is applied via `az vm run-command invoke` running `Set-TimeZone` on every deployed VM.
@@ -471,13 +686,50 @@ Available presets:
 3. Format and mount data disks before SQL installation
 
 ### 6. WSFC + AOAG Configuration (Site 2)
+
+#### 6a. Register File Share Witness Storage Account in AD (Automated)
+
+The File Share Witness storage account is deployed during Tier 1 with shared keys disabled and a private endpoint. Before the cluster can use it as a WSFC quorum witness, the storage account must be registered as a computer object in AD for Kerberos SMB authentication.
+
+**This step is automated by `deploy.ps1`** — when deploying Tier 2 or higher with domain join enabled, the script automatically:
+
+1. Discovers the witness storage account by tag (`workload=file-share-witness`) in `{base}-rg-identity`
+2. Temporarily enables shared key access (required to generate the Kerberos key)
+3. Generates and retrieves the `kerb1` Kerberos key
+4. Runs `Register-StorageInAD.ps1` on DC01 via RunCommand — creates a computer account in AD, sets the AES-256 Kerberos key with the correct salt, and registers the `cifs` SPN
+5. Configures the storage account with AD DS identity (domain GUID, SID, forest name)
+6. Flushes the KDC cache on DC02 (DC01's KDC is restarted by the script)
+7. Verifies the Kerberos SMB mount from a domain-joined AOAG SQL node
+8. Re-disables shared key data-plane access
+
+If the storage account is already registered (re-running an incremental deploy), the step is skipped automatically.
+
+> **Manual fallback:** If the automated registration fails (e.g., DC01 not reachable), the script logs a warning and continues. You can re-run the deployment — the registration will be retried. To troubleshoot, check the RunCommand output in the Azure Portal for DC01.
+
+**Standalone execution** (already-deployed lab):
+```powershell
+# Register witness storage in AD (no full redeploy needed)
+.\Register-WitnessStorage.ps1 -BaseName azlab
+
+# With explicit domain name
+.\Register-WitnessStorage.ps1 -BaseName azlab -DomainName azlab.local
+
+# Re-register (even if already configured)
+.\Register-WitnessStorage.ps1 -BaseName azlab -Force
+```
+
+> **Error 1396** ("target account name is incorrect") during mount verification indicates an AES-256 key mismatch. Re-running with `-Force` will regenerate the key and re-register.
+
+#### 6b. Create Failover Cluster and Configure Quorum
 1. Enable the **Failover Clustering** feature on both AOAG SQL nodes
 2. Create a **Windows Server Failover Cluster** with both Site 2 SQL VMs
-3. Configure **Cloud Witness** quorum using the deployed storage account:
-   ```bash
-   az storage account show --name <storage-account-name> --resource-group {base}-rg-identity --query name
-   az storage account keys list --name <storage-account-name> --resource-group {base}-rg-identity --query [0].value
+3. Configure **File Share Witness** quorum:
+   ```powershell
+   Set-ClusterQuorum -Cluster <ClusterName> -FileShareWitness "\\<stg-name>.file.core.windows.net\witness"
    ```
+   Verify: `Get-ClusterQuorum | Select-Object QuorumResource`
+
+#### 6c. Configure Always On Availability Group
 4. Enable **AlwaysOn Availability Groups** in SQL Server Configuration Manager
 5. Create the Availability Group and configure the **AG Listener**:
    - Listener Name: `LISTENER-C`
@@ -519,7 +771,7 @@ Available presets:
 | Resource Group | Contents |
 |---------------|----------|
 | `{base}-rg-network` | VNet, NSGs, Azure Bastion, VPN Gateway, Public IPs |
-| `{base}-rg-identity` | DC01, DC02, Key Vault, Cloud Witness Storage Account |
+| `{base}-rg-identity` | DC01, DC02, Key Vault, File Share Witness Storage Account |
 | `{base}-rg-main` | SQL-CAS, SQL-PrimA, CAS, PrimaryA (SQL VMs omitted when colocated) |
 | `{base}-rg-site1` | SQL-PrimB, PrimaryB (SQL VM omitted when colocated) |
 | `{base}-rg-site2` | SQL AOAG Node 1, SQL AOAG Node 2, Availability Set, ILB, PrimaryC |
@@ -570,6 +822,7 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 | **VPN Gateway still provisioning** | VPN Gateways take 25–45 minutes. Check status: Portal → `{base}-vpngw` → Overview |
 | **VPN client can't connect** | Verify client cert is in `CurrentUser\My` and root cert is in `CurrentUser\Trusted Root`. Re-download VPN client config. |
 | **VPN connected but can't reach VMs** | Ensure VPN client address pool (`172.16.0.0/24`) doesn't overlap with your local network. Check NSG rules allow traffic. |
+| **VPN connected but private endpoints fail** | Your local DNS resolves to public IPs. Run `Set-VpnDnsConfig.ps1 -Action Install -BaseName {base}` in Admin PowerShell. Verify with `Resolve-DnsName` (not `nslookup`). See [1d. VPN DNS Configuration](#1d-vpn-dns-configuration-private-endpoints). |
 | **Key Vault access denied** | Ensure your Entra ID user/group was assigned during deployment, or add manually: Portal → Key Vault → Access control (IAM) |
 | **AD DS promotion timeout** | Check `C:\WindowsTemp\PromoteDC1.log` or `ReplicaDC.log` on the DC VM |
 | **AD configuration failure** | Check `C:\WindowsTemp\ConfigureAD.log` on DC01. RunCommand has 900s timeout. |
@@ -579,6 +832,10 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 | **Domain not reachable from DC02** | Verify DC01 promotion completed, DNS resolves the domain name |
 | **VM not domain-joined** | Ensure VMs have restarted after VNet DNS was set to DC IPs |
 | **Domain join extension failed** | Check the VM's extensions blade in the Azure Portal. The `JoinDomain` extension logs errors there. Verify DC01/DC02 are running, DNS resolves the domain, and `svc-domjoin` account exists in AD. |
+| **Entra Connect wizard fails** | Ensure the VM has internet access (NAT Gateway on snet-ad). Verify Global Admin credentials and that the Entra ID domain is verified. Check `C:\ProgramData\AADConnect\*.log`. |
+| **Entra ID join (AADLoginForWindows) failed** | Check the extension status in the Portal. VM must have internet access to reach `login.microsoftonline.com`. Ensure an AD P2 license is available. |
+| **Can't login to Management VM with Entra ID** | Verify the `Virtual Machine Administrator Login` RBAC role is assigned. Connect via Bastion and use `AzureAD\user@domain.com` format. |
+| **Entra Connect install failed** | Check RunCommand output in the Portal. The MSI download requires TLS 1.2 and internet access. Review `C:\WindowsTemp\EntraConnect-Install.log` on the target VM. |
 | **Password breaks az CLI on Windows** | The admin password charset avoids `&`, `%`, `^` which break cmd.exe argument parsing. If you see truncated parameter errors, regenerate with a fresh deploy. |
 
 ---
@@ -587,7 +844,11 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 
 - [Application Installation (MECM CAS/Primary)](https://learn.microsoft.com/mem/configmgr/core/servers/deploy/install/setup-wizard-central-primary)
 - [Azure ILB for AG Listener](https://learn.microsoft.com/azure/azure-sql/virtual-machines/windows/availability-group-load-balancer-portal-configure)
-- [Cloud Witness for WSFC Quorum](https://learn.microsoft.com/windows-server/failover-clustering/deploy-cloud-witness)
+- [File Share Witness for WSFC Quorum](https://learn.microsoft.com/windows-server/failover-clustering/manage-cluster-quorum#configure-the-cluster-quorum)
+- [Azure Files AD DS Authentication](https://learn.microsoft.com/azure/storage/files/storage-files-identity-ad-ds-enable)
 - [Azure Bastion Documentation](https://learn.microsoft.com/azure/bastion/bastion-overview)
 - [Azure P2S VPN with Certificate Auth](https://learn.microsoft.com/azure/vpn-gateway/vpn-gateway-howto-point-to-site-resource-manager-portal)
+- [Microsoft Entra Connect Sync](https://learn.microsoft.com/entra/identity/hybrid/connect/how-to-connect-install-express)
+- [AADLoginForWindows VM Extension](https://learn.microsoft.com/entra/identity/devices/howto-vm-sign-in-azure-ad-windows)
+- [Azure Files Entra ID Kerberos Authentication](https://learn.microsoft.com/azure/storage/files/storage-files-identity-auth-azure-active-directory-enable)
 - [Bicep Documentation](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)

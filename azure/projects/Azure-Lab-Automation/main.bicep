@@ -136,6 +136,15 @@ param dc02Ip string = '10.0.1.5'
 @description('Static IP for Entra Connect server')
 param entraConnectIp string = '10.0.1.6'
 
+@description('Static IP for DC in Main site subnet')
+param dcMainIp string = '10.0.20.250'
+
+@description('Static IP for DC in Site 1 subnet')
+param dcSite1Ip string = '10.0.30.250'
+
+@description('Static IP for DC in Site 2 subnet')
+param dcSite2Ip string = '10.0.40.250'
+
 @description('AOAG Listener IP (ILB frontend) in Site 2 subnet')
 param aoagListenerIp string = '10.0.40.10'
 
@@ -197,6 +206,20 @@ param vmNamePrimB string = '${baseName}-prmb'
 @maxLength(15)
 param vmNamePrimC string = '${baseName}-prmc'
 
+// --- Site DC VM Names --------------------------------------------------------
+
+@description('VM name: Domain Controller for Main site')
+@maxLength(15)
+param vmNameDcMain string = '${baseName}-dc03'
+
+@description('VM name: Domain Controller for Site 1')
+@maxLength(15)
+param vmNameDcSite1 string = '${baseName}-dc04'
+
+@description('VM name: Domain Controller for Site 2')
+@maxLength(15)
+param vmNameDcSite2 string = '${baseName}-dc05'
+
 // --- OS Image ----------------------------------------------------------------
 
 @description('Windows Server image publisher')
@@ -241,6 +264,9 @@ var domainDN = join(map(domainParts, part => 'DC=${part}'), ',')
 // VM names — DCs are always baseName + suffix; MCM/SQL names come from parameters
 var dc01Name = '${baseName}-dc01'
 var dc02Name = '${baseName}-dc02'
+var dcMainName = vmNameDcMain
+var dcSite1Name = vmNameDcSite1
+var dcSite2Name = vmNameDcSite2
 
 // Effective MCM VM size — upsize when SQL is colocated
 var effectiveAppSize = colocateSql ? sizeAppColocated : sizeApp
@@ -453,6 +479,65 @@ module dc02 'modules/compute/vm.bicep' = {
   }
 }
 
+// --- Site Domain Controller VMs (one per site for AD Sites & Services) -------
+
+module dcMain 'modules/compute/vm.bicep' = {
+  name: 'deploy-dc-main'
+  scope: rgMainSite
+  params: {
+    vmName: dcMainName
+    location: location
+    vmSize: sizeDC
+    subnetId: vnet.outputs.snetMainId
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: dcMainIp
+    osDiskSku: osDiskSku
+    tags: union(commonTags, { role: 'domain-controller', site: 'main' })
+  }
+}
+
+module dcSite1 'modules/compute/vm.bicep' = {
+  name: 'deploy-dc-site1'
+  scope: rgSite1Res
+  params: {
+    vmName: dcSite1Name
+    location: location
+    vmSize: sizeDC
+    subnetId: vnet.outputs.snetSite1Id
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: dcSite1Ip
+    osDiskSku: osDiskSku
+    tags: union(commonTags, { role: 'domain-controller', site: 'site1' })
+  }
+}
+
+module dcSite2 'modules/compute/vm.bicep' = {
+  name: 'deploy-dc-site2'
+  scope: rgSite2Res
+  params: {
+    vmName: dcSite2Name
+    location: location
+    vmSize: sizeDC
+    subnetId: vnet.outputs.snetSite2Id
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: dcSite2Ip
+    osDiskSku: osDiskSku
+    tags: union(commonTags, { role: 'domain-controller', site: 'site2' })
+  }
+}
+
 // --- Promote DC01 as first domain controller --------------------------------
 
 module promoteDc01 'modules/identity/promoteDC.bicep' = {
@@ -469,12 +554,62 @@ module promoteDc01 'modules/identity/promoteDC.bicep' = {
   }
 }
 
-// --- Configure AD: OUs, Groups, Service Accounts, gMSA ----------------------
+// --- Promote site DCs as replica domain controllers -------------------------
+
+module promoteDcMain 'modules/identity/replicaDC.bicep' = {
+  name: 'deploy-promote-dc-main'
+  scope: rgMainSite
+  dependsOn: [dcMain, promoteDc01]
+  params: {
+    vmName: dcMainName
+    location: location
+    domainName: domainName
+    primaryDcIp: dc01Ip
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    dsrmPassword: adminPassword
+    tags: union(commonTags, { role: 'domain-controller', site: 'main' })
+  }
+}
+
+module promoteDcSite1 'modules/identity/replicaDC.bicep' = {
+  name: 'deploy-promote-dc-site1'
+  scope: rgSite1Res
+  dependsOn: [dcSite1, promoteDc01]
+  params: {
+    vmName: dcSite1Name
+    location: location
+    domainName: domainName
+    primaryDcIp: dc01Ip
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    dsrmPassword: adminPassword
+    tags: union(commonTags, { role: 'domain-controller', site: 'site1' })
+  }
+}
+
+module promoteDcSite2 'modules/identity/replicaDC.bicep' = {
+  name: 'deploy-promote-dc-site2'
+  scope: rgSite2Res
+  dependsOn: [dcSite2, promoteDc01]
+  params: {
+    vmName: dcSite2Name
+    location: location
+    domainName: domainName
+    primaryDcIp: dc01Ip
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    dsrmPassword: adminPassword
+    tags: union(commonTags, { role: 'domain-controller', site: 'site2' })
+  }
+}
+
+// --- Configure AD: OUs, Groups, Service Accounts, gMSA, Sites & Services ----
 
 module configureAd 'modules/identity/configureAD.bicep' = {
   name: 'deploy-configure-ad'
   scope: rgId
-  dependsOn: [promoteDc01, promoteDc02]
+  dependsOn: [promoteDc01, promoteDc02, promoteDcMain, promoteDcSite1, promoteDcSite2]
   params: {
     vmName: dc01Name
     location: location
@@ -482,6 +617,14 @@ module configureAd 'modules/identity/configureAD.bicep' = {
     svcAccountPassword: adminPassword
     entraIdDomain: entraIdDomain
     domainStrategy: domainStrategy
+    baseName: baseName
+    snetAdPrefix: snetAdPrefix
+    snetMainPrefix: snetMainPrefix
+    snetSite1Prefix: snetSite1Prefix
+    snetSite2Prefix: snetSite2Prefix
+    dcMainName: dcMainName
+    dcSite1Name: dcSite1Name
+    dcSite2Name: dcSite2Name
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }

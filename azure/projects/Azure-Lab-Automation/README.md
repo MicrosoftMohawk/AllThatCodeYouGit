@@ -1,6 +1,6 @@
 # Azure Global Lab — Bicep Deployment
 
-Automated infrastructure-as-code deployment for a **modular Azure lab** environment. Deploys a multi-tier hierarchy with a Central Administration Site (CAS), 3 child primary sites across multiple subnets simulating global site dispersion, SQL Server infrastructure including an Always On Availability Group (AOAG), Active Directory domain controllers, and a Point-to-Site VPN Gateway for remote connectivity. Designed to expand with additional workload modules over time.
+Automated infrastructure-as-code deployment for a **modular Azure lab** environment. Deploys a multi-tier hierarchy with a Central Administration Site (CAS), 3 child primary sites across multiple subnets simulating global site dispersion, SQL Server infrastructure including an Always On Availability Group (AOAG), Active Directory domain controllers with AD Sites and Services configuration, and a Point-to-Site VPN Gateway for remote connectivity. Designed to expand with additional workload modules over time.
 
 ---
 
@@ -29,19 +29,19 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────────┐│
 │  │ snet-main (10.0.20.0/24)  — Main Site / HQ                         ││
-│  │   CAS01        PrimaryA        SQL-CAS        SQL-PrimA            ││
+│  │   DC03 (10.0.20.250)  CAS01   PrimaryA    SQL-CAS    SQL-PrimA     ││
 │  └──────────────────────────────────────────────────────────────────────┘│
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────────┐│
 │  │ snet-site1 (10.0.30.0/24)  — Remote Site 1                         ││
-│  │   PrimaryB        SQL-PrimB                                         ││
+│  │   DC04 (10.0.30.250)  PrimaryB        SQL-PrimB                     ││
 │  └──────────────────────────────────────────────────────────────────────┘│
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────────┐│
 │  │ snet-site2 (10.0.40.0/24)  — Remote Site 2 (AOAG)                  ││
-│  │   PrimaryC        SQL-PrimC01 ──┐                                   ││
-│  │                   SQL-PrimC02 ──┤ AOAG + ILB Listener (10.0.40.10) ││
-│  │                                 │ File Share Witness (Azure Files)  ││
+│  │   DC05 (10.0.40.250)  PrimaryC  SQL-PrimC01 ──┐                     ││
+│  │                               SQL-PrimC02 ──┤ AOAG + ILB (10.0.40.10)││
+│  │                                              │ File Share Witness    ││
 │  └──────────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -50,15 +50,18 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 
 ### VM Inventory
 
-The lab deploys up to **11 VMs** (or fewer with `colocateSql`), plus up to **2 additional VMs** when Entra ID integration is enabled.
+The lab deploys up to **14 VMs** (or fewer with `colocateSql`), plus up to **2 additional VMs** when Entra ID integration is enabled.
 All MCM and SQL VM names are **customizable** at deploy time via an interactive naming prompt or Bicep parameters.
 
-#### Default Layout — Separate SQL (11 VMs)
+#### Default Layout — Separate SQL (14 VMs)
 
 | Default Name | Role | Size | Subnet | Tier |
 |--------------|------|------|--------|------|
 | `{base}-dc01` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
 | `{base}-dc02` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
+| `{base}-dc03` | Domain Controller (Main) | Standard_D2s_v5 | snet-main | 1 |
+| `{base}-dc04` | Domain Controller (Site 1) | Standard_D2s_v5 | snet-site1 | 1 |
+| `{base}-dc05` | Domain Controller (Site 2) | Standard_D2s_v5 | snet-site2 | 1 |
 | `{base}-sqcs` | SQL Server (CAS DB) | Standard_D4s_v5 | snet-main | 2 |
 | `{base}-sqpa` | SQL Server (PrimA DB) | Standard_D4s_v5 | snet-main | 2 |
 | `{base}-sqpb` | SQL Server (PrimB DB) | Standard_D4s_v5 | snet-site1 | 2 |
@@ -80,7 +83,7 @@ All MCM and SQL VM names are **customizable** at deploy time via an interactive 
 
 \*\* Deployed separately via `deploy-mgmt.ps1` after the main lab is running.
 
-#### Colocated SQL Layout — SQL on MCM Servers (8 VMs)
+#### Colocated SQL Layout — SQL on MCM Servers (11 VMs)
 
 When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as MCM. The MCM VMs are upsized to Standard_D8s_v5 and get data disks. Site 2 AOAG nodes are always separate.
 
@@ -88,6 +91,9 @@ When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as
 |--------------|------|------|--------|------|
 | `{base}-dc01` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
 | `{base}-dc02` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
+| `{base}-dc03` | Domain Controller (Main) | Standard_D2s_v5 | snet-main | 1 |
+| `{base}-dc04` | Domain Controller (Site 1) | Standard_D2s_v5 | snet-site1 | 1 |
+| `{base}-dc05` | Domain Controller (Site 2) | Standard_D2s_v5 | snet-site2 | 1 |
 | `{base}-sqc1` | SQL AOAG Node 1 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
 | `{base}-sqc2` | SQL AOAG Node 2 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
 | `{base}-cas` | MCM CAS + SQL | Standard_D8s_v5 | snet-main | 3 |
@@ -121,23 +127,23 @@ When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as
 
 Ensure your subscription has sufficient vCPU quota in the target region:
 
-#### Separate SQL mode (default — 11 VMs)
+#### Separate SQL mode (default — 14 VMs)
 
 | VM Size | vCPUs each | Count | Total vCPUs |
 |---------|-----------|-------|-------------|
-| Standard_D2s_v5 | 2 | 2 (DCs) | 4 |
+| Standard_D2s_v5 | 2 | 5 (DCs) | 10 |
 | Standard_D4s_v5 | 4 | 7 (3 standalone SQL + 4 MCM) | 28 |
 | Standard_D8s_v5 | 8 | 2 (SQL AOAG) | 16 |
-| **Total** | | **11** | **48 vCPUs** |
+| **Total** | | **14** | **54 vCPUs** |
 
-#### Colocated SQL mode (`-ColocateSql` — 8 VMs)
+#### Colocated SQL mode (`-ColocateSql` — 11 VMs)
 
 | VM Size | vCPUs each | Count | Total vCPUs |
 |---------|-----------|-------|-------------|
-| Standard_D2s_v5 | 2 | 2 (DCs) | 4 |
+| Standard_D2s_v5 | 2 | 5 (DCs) | 10 |
 | Standard_D4s_v5 | 4 | 1 (PrimC — no SQL) | 4 |
 | Standard_D8s_v5 | 8 | 5 (3 MCM+SQL colocated + 2 AOAG) | 40 |
-| **Total** | | **8** | **48 vCPUs** |
+| **Total** | | **11** | **54 vCPUs** |
 
 Check quota:
 ```bash
@@ -413,6 +419,9 @@ Azure-Lab/
 | `vmNamePrimA` | string | `{base}-prma` | MCM Child Primary A |
 | `vmNamePrimB` | string | `{base}-prmb` | MCM Child Primary B |
 | `vmNamePrimC` | string | `{base}-prmc` | MCM Child Primary C |
+| `vmNameDcMain` | string | `{base}-dc03` | Domain Controller for Main site |
+| `vmNameDcSite1` | string | `{base}-dc04` | Domain Controller for Site 1 |
+| `vmNameDcSite2` | string | `{base}-dc05` | Domain Controller for Site 2 |
 | **Networking** | | | |
 | `vnetAddressPrefix` | string | `10.0.0.0/16` | VNet address space |
 | `snetBastionPrefix` | string | `10.0.0.0/26` | Azure Bastion subnet CIDR |
@@ -427,6 +436,9 @@ Azure-Lab/
 | `kvPrincipalType` | string | `User` | Principal type for KV RBAC: `User` or `Group` |
 | `dc01Ip` | string | `10.0.1.4` | Static IP for DC01 |
 | `dc02Ip` | string | `10.0.1.5` | Static IP for DC02 |
+| `dcMainIp` | string | `10.0.20.250` | Static IP for DC in Main site subnet |
+| `dcSite1Ip` | string | `10.0.30.250` | Static IP for DC in Site 1 subnet |
+| `dcSite2Ip` | string | `10.0.40.250` | Static IP for DC in Site 2 subnet |
 | `aoagListenerIp` | string | `10.0.40.10` | AOAG Listener IP (ILB frontend) |
 | `imagePublisher` | string | `MicrosoftWindowsServer` | OS image publisher |
 | `imageOffer` | string | `WindowsServer` | OS image offer |
@@ -526,7 +538,16 @@ Resolve-DnsName {baseName}-kv-*.vault.azure.net
 AD DS is automatically configured during Tier 1 deployment:
 - **DC01** promoted as the first domain controller in a new forest
 - **DC02** promoted as a replica domain controller
+- **DC03** (Main), **DC04** (Site 1), **DC05** (Site 2) promoted as replica DCs in their respective site subnets
 - **VNet DNS** set to DC IPs (10.0.1.4, 10.0.1.5) at deployment time
+- **AD Sites and Services** configured with 4 named sites:
+  - `{baseName}-identity` — identity subnet (DC01, DC02) — renamed from Default-First-Site-Name
+  - `{baseName}-main` — main site subnet (DC03)
+  - `{baseName}-site1` — site 1 subnet (DC04)
+  - `{baseName}-site2` — site 2 subnet (DC05)
+  - All site subnets are mapped to their respective AD sites
+  - All sites are added to `DEFAULTIPSITELINK` for replication
+  - Site DCs are moved to their correct AD sites
 - **OUs**: Lab Accounts > Service Accounts, Lab Accounts > Admins, Lab Groups, Lab Servers > SQL Servers + App Servers + Storage Accounts
 - **Security Groups**: GRP-DomainAdmins-Lab, GRP-SQLAdmins, GRP-AppAdmins, GRP-ServerAdmins, GRP-DomainJoin
 - **Service Accounts** (OU=Service Accounts): svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, svc-appnaa
@@ -534,7 +555,7 @@ AD DS is automatically configured during Tier 1 deployment:
 - **gMSA**: gmsa-sqlsvc (for SQL Server, retrieve principals: GRP-SQLAdmins)
 - **Domain-join delegation**: svc-domjoin has CreateChild + WriteProperty on CN=Computers
 - **OU delegation**: lab-admin has GenericAll on Lab Servers, Lab Accounts, Lab Groups OUs
-- **DNS Forwarder**: `168.63.129.16` (Azure-provided DNS) configured on both DCs so VMs can resolve public hostnames
+- **DNS Forwarder**: `168.63.129.16` (Azure-provided DNS) configured on all DCs so VMs can resolve public hostnames
 
 > **Note:** After DC promotion, VMs may need a restart to pick up the custom DNS settings. DCs reboot automatically after promotion.
 

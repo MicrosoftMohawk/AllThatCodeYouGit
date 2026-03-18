@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Configure Active Directory -- OUs, Security Groups, Service Accounts, gMSA
+    Configure Active Directory -- OUs, Security Groups, Service Accounts, gMSA,
+    AD Sites and Services.
     Runs as a VM RunCommand on the first domain controller after forest promotion.
 
 .PARAMETER DomainName
@@ -16,6 +17,30 @@
 .PARAMETER DomainStrategy
     'subdomain' = AD domain is a subdomain of EntraIdDomain (UPNs already match)
     'independent' = AD domain is separate; EntraIdDomain added as UPN suffix
+
+.PARAMETER BaseName
+    Base name prefix used for AD site naming (e.g., 'azlab')
+
+.PARAMETER SnetAdPrefix
+    Identity / AD subnet CIDR (e.g., 10.0.1.0/24)
+
+.PARAMETER SnetMainPrefix
+    Main site subnet CIDR (e.g., 10.0.20.0/24)
+
+.PARAMETER SnetSite1Prefix
+    Site 1 subnet CIDR (e.g., 10.0.30.0/24)
+
+.PARAMETER SnetSite2Prefix
+    Site 2 subnet CIDR (e.g., 10.0.40.0/24)
+
+.PARAMETER DcMainName
+    VM (hostname) name of the DC deployed to the Main site subnet
+
+.PARAMETER DcSite1Name
+    VM (hostname) name of the DC deployed to the Site 1 subnet
+
+.PARAMETER DcSite2Name
+    VM (hostname) name of the DC deployed to the Site 2 subnet
 #>
 param(
     [Parameter(Mandatory)]
@@ -28,7 +53,31 @@ param(
     [string]$EntraIdDomain = '',
 
     [Parameter()]
-    [string]$DomainStrategy = 'subdomain'
+    [string]$DomainStrategy = 'subdomain',
+
+    [Parameter(Mandatory)]
+    [string]$BaseName,
+
+    [Parameter(Mandatory)]
+    [string]$SnetAdPrefix,
+
+    [Parameter(Mandatory)]
+    [string]$SnetMainPrefix,
+
+    [Parameter(Mandatory)]
+    [string]$SnetSite1Prefix,
+
+    [Parameter(Mandatory)]
+    [string]$SnetSite2Prefix,
+
+    [Parameter(Mandatory)]
+    [string]$DcMainName,
+
+    [Parameter(Mandatory)]
+    [string]$DcSite1Name,
+
+    [Parameter(Mandatory)]
+    [string]$DcSite2Name
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,6 +131,123 @@ try {
     }
 } catch {
     Write-Output "  WARNING: Failed to enumerate domain controllers (non-fatal): $_"
+}
+
+# ============================================================================
+# Configure AD Sites and Services
+# ============================================================================
+# Creates named AD sites, associates subnets, and moves DCs to correct sites.
+# This allows MCM boundary groups to align with AD sites for a realistic
+# global deployment topology.
+# ============================================================================
+Write-Output "Configuring AD Sites and Services..."
+
+$siteIdentity = "${BaseName}-identity"
+$siteMain     = "${BaseName}-main"
+$siteSite1    = "${BaseName}-site1"
+$siteSite2    = "${BaseName}-site2"
+
+# --- Rename Default-First-Site-Name to {baseName}-identity -------------------
+try {
+    $defaultSite = Get-ADReplicationSite -Filter "Name -eq 'Default-First-Site-Name'" -ErrorAction SilentlyContinue
+    if ($defaultSite) {
+        Rename-ADObject -Identity $defaultSite.DistinguishedName -NewName $siteIdentity
+        Write-Output "  Renamed Default-First-Site-Name to: $siteIdentity"
+    } else {
+        $existingSite = Get-ADReplicationSite -Filter "Name -eq '$siteIdentity'" -ErrorAction SilentlyContinue
+        if ($existingSite) {
+            Write-Output "  Site already exists: $siteIdentity (default site already renamed)"
+        } else {
+            Write-Output "  WARNING: Default-First-Site-Name not found and $siteIdentity does not exist"
+        }
+    }
+} catch {
+    Write-Output "  WARNING: Failed to rename default site (non-fatal): $_"
+}
+
+# --- Create new sites --------------------------------------------------------
+$newSites = @($siteMain, $siteSite1, $siteSite2)
+foreach ($siteName in $newSites) {
+    try {
+        if (-not (Get-ADReplicationSite -Filter "Name -eq '$siteName'" -ErrorAction SilentlyContinue)) {
+            New-ADReplicationSite -Name $siteName
+            Write-Output "  Created site: $siteName"
+        } else {
+            Write-Output "  Site already exists: $siteName"
+        }
+    } catch {
+        Write-Output "  WARNING: Failed to create site $siteName (non-fatal): $_"
+    }
+}
+
+# --- Add all sites to DEFAULTIPSITELINK for replication ----------------------
+try {
+    $siteLink = Get-ADReplicationSiteLink -Identity 'DEFAULTIPSITELINK' -ErrorAction Stop
+    $currentSites = $siteLink.SitesIncluded | ForEach-Object {
+        ($_ -split ',')[0] -replace '^CN=', ''
+    }
+    $allSites = @($siteIdentity, $siteMain, $siteSite1, $siteSite2)
+    $sitesToAdd = @()
+    foreach ($s in $allSites) {
+        if ($currentSites -notcontains $s) {
+            $sitesToAdd += $s
+        }
+    }
+    if ($sitesToAdd.Count -gt 0) {
+        Set-ADReplicationSiteLink -Identity 'DEFAULTIPSITELINK' -SitesIncluded @{Add = $sitesToAdd}
+        Write-Output "  Added sites to DEFAULTIPSITELINK: $($sitesToAdd -join ', ')"
+    } else {
+        Write-Output "  All sites already in DEFAULTIPSITELINK"
+    }
+} catch {
+    Write-Output "  WARNING: Failed to update DEFAULTIPSITELINK (non-fatal): $_"
+}
+
+# --- Create AD subnets and associate to sites --------------------------------
+$subnetSiteMap = @(
+    @{ Subnet = $SnetAdPrefix;    Site = $siteIdentity }
+    @{ Subnet = $SnetMainPrefix;  Site = $siteMain }
+    @{ Subnet = $SnetSite1Prefix; Site = $siteSite1 }
+    @{ Subnet = $SnetSite2Prefix; Site = $siteSite2 }
+)
+foreach ($entry in $subnetSiteMap) {
+    try {
+        $existing = Get-ADReplicationSubnet -Filter "Name -eq '$($entry.Subnet)'" -ErrorAction SilentlyContinue
+        if (-not $existing) {
+            New-ADReplicationSubnet -Name $entry.Subnet -Site $entry.Site
+            Write-Output "  Created subnet $($entry.Subnet) -> site $($entry.Site)"
+        } else {
+            Write-Output "  Subnet already exists: $($entry.Subnet)"
+        }
+    } catch {
+        Write-Output "  WARNING: Failed to create subnet $($entry.Subnet) (non-fatal): $_"
+    }
+}
+
+# --- Move site DCs to their correct AD sites ---------------------------------
+# DC01 and DC02 are already in the identity site (renamed from Default-First-Site-Name).
+# Move the 3 site DCs to their respective sites.
+$dcSiteMap = @(
+    @{ DC = $DcMainName;  Site = $siteMain }
+    @{ DC = $DcSite1Name; Site = $siteSite1 }
+    @{ DC = $DcSite2Name; Site = $siteSite2 }
+)
+foreach ($entry in $dcSiteMap) {
+    try {
+        $dcObj = Get-ADDomainController -Identity $entry.DC -ErrorAction SilentlyContinue
+        if ($dcObj) {
+            if ($dcObj.Site -ne $entry.Site) {
+                Move-ADDirectoryServer -Identity $entry.DC -Site $entry.Site
+                Write-Output "  Moved DC $($entry.DC) to site: $($entry.Site)"
+            } else {
+                Write-Output "  DC $($entry.DC) already in site: $($entry.Site)"
+            }
+        } else {
+            Write-Output "  WARNING: DC $($entry.DC) not found as domain controller (may still be promoting)"
+        }
+    } catch {
+        Write-Output "  WARNING: Failed to move DC $($entry.DC) to $($entry.Site) (non-fatal): $_"
+    }
 }
 
 # ============================================================================
@@ -330,6 +496,12 @@ Write-Output " Accounts:  svc-domjoin, svc-appadmin, svc-sqlsvc, svc-sqlagent, s
 Write-Output " Admins:    lab-admin (delegated OU admin), mcm-admin, sql-admin"
 Write-Output " gMSA:      gmsa-sqlsvc"
 Write-Output " DNS Fwd:   168.63.129.16 (Azure internal DNS) -- all DCs"
+Write-Output " AD Sites:  $siteIdentity, $siteMain, $siteSite1, $siteSite2"
+Write-Output " Subnets:   $SnetAdPrefix -> $siteIdentity"
+Write-Output "            $SnetMainPrefix -> $siteMain"
+Write-Output "            $SnetSite1Prefix -> $siteSite1"
+Write-Output "            $SnetSite2Prefix -> $siteSite2"
+Write-Output " Site DCs:  $DcMainName -> $siteMain, $DcSite1Name -> $siteSite1, $DcSite2Name -> $siteSite2"
 if (-not [string]::IsNullOrWhiteSpace($EntraIdDomain)) {
     Write-Output " Entra ID:  $EntraIdDomain (strategy: $DomainStrategy)"
 }

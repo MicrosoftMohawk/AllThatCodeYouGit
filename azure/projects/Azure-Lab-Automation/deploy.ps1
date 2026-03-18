@@ -285,14 +285,24 @@ if ($DeploymentTier -ge 2) {
             Write-Ok "Key Vault found: $kvName"
 
             # --- Retrieve existing admin password from Key Vault ---------------
-            $ExistingAdminPassword = az keyvault secret show --vault-name $kvName --name vm-admin-password --query value -o tsv 2>&1
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($ExistingAdminPassword)) {
-                $ExistingAdminPassword = $ExistingAdminPassword.Trim()
+            $kvResult = az keyvault secret show --vault-name $kvName --name vm-admin-password --query value -o tsv 2>&1
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($kvResult)) {
+                $ExistingAdminPassword = $kvResult.Trim()
                 Write-Ok "Existing admin password retrieved from Key Vault (will reuse)."
             } else {
-                Write-Host "   WARNING: Could not retrieve admin password from Key Vault." -ForegroundColor Yellow
-                Write-Host "   Key Vault has no public endpoint. Connect via VPN for incremental deploys." -ForegroundColor Yellow
-                Write-Host "   A new password will be generated. DC extensions may re-run." -ForegroundColor Yellow
+                $kvError = "$kvResult"
+                if ($kvError -match 'AADSTS|invalid_grant|InteractionRequired') {
+                    Write-Host "   WARNING: Key Vault access failed due to a stale authentication token." -ForegroundColor Yellow
+                    Write-Host "   Your Azure CLI session is valid for management operations but the" -ForegroundColor Yellow
+                    Write-Host "   Key Vault data-plane token has expired or been invalidated." -ForegroundColor Yellow
+                    Write-Host "   Run:  az account clear && az login" -ForegroundColor Cyan
+                    Write-Host "   Then re-run this script." -ForegroundColor Yellow
+                    exit 1
+                } else {
+                    Write-Host "   WARNING: Could not retrieve admin password from Key Vault." -ForegroundColor Yellow
+                    Write-Host "   Key Vault has no public endpoint. Connect via VPN for incremental deploys." -ForegroundColor Yellow
+                    Write-Host "   A new password will be generated. DC extensions may re-run." -ForegroundColor Yellow
+                }
                 $ExistingAdminPassword = ''
             }
         } else {

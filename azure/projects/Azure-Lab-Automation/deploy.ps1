@@ -1270,6 +1270,56 @@ if ($WhatIf) {
     exit 0
 }
 
+# =============================================================================
+# 4b. Preserve Witness Storage AD DS Config Across Redeployment
+# =============================================================================
+# The storageAccount.bicep module sets azureFilesIdentityBasedAuthentication to
+# null when enableADDS is not passed (the default).  On redeployment the ARM PUT
+# wipes whatever AD DS config was set post-deploy via 'az storage account update'.
+# This forces a full re-registration — generating a new kerb1 key — and the gap
+# between key generation and full AD replication causes error 1396.
+#
+# Fix: snapshot the existing AD DS config BEFORE deploying Bicep, then restore
+# it immediately AFTER.  The existing "skip if already registered" check then
+# fires correctly and no kerb1 key is regenerated.
+# =============================================================================
+$savedWitnessAddsConfig = $null
+$savedWitnessStgName    = $null
+$savedWitnessSamAccount = $null
+$savedWitnessRgIdentity = "$BaseName-rg-identity"
+
+Write-Step "Checking for existing witness storage AD DS config to preserve..."
+$preWitnessStg = az storage account list `
+    --resource-group $savedWitnessRgIdentity `
+    --query "[?tags.workload=='file-share-witness'].name | [0]" -o tsv 2>&1
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($preWitnessStg)) {
+    $preWitnessStg = $preWitnessStg.Trim()
+    $preAddsJson = az storage account show `
+        --name $preWitnessStg -g $savedWitnessRgIdentity `
+        --query "azureFilesIdentityBasedAuthentication" -o json 2>&1
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($preAddsJson)) {
+        try {
+            $preAddsObj = ($preAddsJson | Out-String) | ConvertFrom-Json
+            if ($preAddsObj.directoryServiceOptions -eq 'AD') {
+                $savedWitnessAddsConfig = $preAddsObj
+                $savedWitnessStgName    = $preWitnessStg
+                # Extract SAM account name for restore
+                $savedWitnessSamAccount = $preAddsObj.activeDirectoryProperties.samAccountName
+                if ([string]::IsNullOrWhiteSpace($savedWitnessSamAccount)) {
+                    $savedWitnessSamAccount = $preAddsObj.activeDirectoryProperties.azureStorageSid
+                }
+                Write-Ok "Saved AD DS config for $preWitnessStg (will restore after Bicep deployment)"
+            } else {
+                Write-Ok "Witness storage exists but no AD DS config to preserve"
+            }
+        } catch {
+            Write-Ok "Could not parse witness AD DS config — will proceed normally"
+        }
+    }
+} else {
+    Write-Ok "No existing witness storage found (first deployment)"
+}
+
 Write-Header "Starting Deployment (Tier $DeploymentTier)"
 $deploymentName = "$BaseName-deploy-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
@@ -1284,6 +1334,37 @@ if ($LASTEXITCODE -ne 0) {
     Write-Fail "Deployment failed. Check the Azure portal or run:"
     Write-Host "   az deployment sub show --name $deploymentName --query properties.error" -ForegroundColor Gray
     exit 1
+}
+
+# =============================================================================
+# 4c. Restore Witness Storage AD DS Config After Bicep Deployment
+# =============================================================================
+# If we saved AD DS config before the deployment, restore it now.  The Bicep
+# deployment set azureFilesIdentityBasedAuthentication to null, so we put it
+# back.  This avoids re-registering and regenerating the kerb1 key.
+# =============================================================================
+if ($savedWitnessAddsConfig -and $savedWitnessStgName) {
+    Write-Step "Restoring AD DS config on witness storage account ($savedWitnessStgName)..."
+    $adp = $savedWitnessAddsConfig.activeDirectoryProperties
+    az storage account update `
+        --name $savedWitnessStgName -g $savedWitnessRgIdentity `
+        --enable-files-adds true `
+        --domain-name $adp.domainName `
+        --net-bios-domain-name $adp.netBiosDomainName `
+        --forest-name $adp.forestName `
+        --domain-guid $adp.domainGuid `
+        --domain-sid $adp.domainSid `
+        --azure-storage-sid $adp.azureStorageSid `
+        --sam-account-name "$savedWitnessSamAccount" `
+        --account-type Computer `
+        --default-share-permission StorageFileDataSmbShareContributor `
+        -o none 2>&1
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "AD DS config restored — no re-registration needed"
+    } else {
+        Write-Host "   Warning: failed to restore AD DS config. Registration will re-run below." -ForegroundColor Yellow
+    }
 }
 
 # =============================================================================
@@ -1501,21 +1582,55 @@ if ($DeploymentTier -ge 2 -and $JoinDomainBool) {
                                 } else {
                                     Write-Ok "AD DS authentication enabled on witness storage account"
 
-                                    # --- 6. Flush KDC cache on DC02 ---
-                                    Write-Step "Flushing KDC cache on DC02..."
-                                    az vm run-command invoke `
-                                        --resource-group $rgIdentity `
-                                        --name $dc02VmName `
-                                        --command-id RunPowerShellScript `
-                                        --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
-                                        --query "value[0].message" -o tsv 2>&1 | Out-Null
-                                    if ($LASTEXITCODE -eq 0) {
-                                        Write-Ok "DC02 KDC cache flushed"
+                                    # --- 6. Flush KDC cache on ALL Domain Controllers ---
+                                    # Register-StorageInAD.ps1 flushed DC01's KDC and ran
+                                    # repadmin /syncall, but other DCs may still cache the
+                                    # old AES key.  Discover all DCs by tag and restart KDC
+                                    # on each to ensure valid service tickets everywhere.
+                                    Write-Step "Flushing KDC cache on all Domain Controllers..."
+                                    $allDcVmsJson = az vm list `
+                                        --query "[?tags.role=='domain-controller'].{name:name, rg:resourceGroup}" `
+                                        -o json 2>&1
+                                    $allDcVms = @()
+                                    try { $allDcVms = ($allDcVmsJson | Out-String) | ConvertFrom-Json } catch {}
+
+                                    if ($allDcVms.Count -eq 0) {
+                                        # Fallback: flush DC02 only (original behaviour)
+                                        Write-Host "   Could not discover DCs by tag — flushing DC02 only" -ForegroundColor Yellow
+                                        az vm run-command invoke `
+                                            --resource-group $rgIdentity `
+                                            --name $dc02VmName `
+                                            --command-id RunPowerShellScript `
+                                            --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
+                                            --query "value[0].message" -o tsv 2>&1 | Out-Null
                                     } else {
-                                        Write-Host "   Warning: could not restart KDC on DC02." -ForegroundColor Yellow
+                                        $kdcOk = 0; $kdcFail = 0
+                                        foreach ($dc in $allDcVms) {
+                                            # Skip DC01 — already flushed by Register-StorageInAD.ps1
+                                            if ($dc.name -eq $dcVmName) { $kdcOk++; continue }
+                                            Write-Host "   Restarting KDC on $($dc.name)..." -ForegroundColor White -NoNewline
+                                            az vm run-command invoke `
+                                                --resource-group $dc.rg `
+                                                --name $dc.name `
+                                                --command-id RunPowerShellScript `
+                                                --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
+                                                --query "value[0].message" -o tsv 2>&1 | Out-Null
+                                            if ($LASTEXITCODE -eq 0) {
+                                                Write-Host " OK" -ForegroundColor Green
+                                                $kdcOk++
+                                            } else {
+                                                Write-Host " FAILED" -ForegroundColor Red
+                                                $kdcFail++
+                                            }
+                                        }
+                                        if ($kdcFail -eq 0) {
+                                            Write-Ok "KDC flushed on all $($allDcVms.Count) DCs (DC01 flushed during registration)"
+                                        } else {
+                                            Write-Host "   Warning: $kdcFail DC(s) failed KDC restart. SMB may fail from those sites." -ForegroundColor Yellow
+                                        }
                                     }
 
-                                    # --- 7. Verify Kerberos SMB mount ---
+                                    # --- 7. Verify Kerberos SMB mount (with retry) ---
                                     $testRg = "$BaseName-rg-site2"
                                     $testVm = $VmNames.SqlAoag1
                                     Write-Step "Verifying Kerberos SMB mount from $testVm..."
@@ -1535,22 +1650,36 @@ Write-Host "MOUNT_EXIT=`$LASTEXITCODE"
 `$r | ForEach-Object { Write-Host `$_ }
 net use Z: /delete 2>&1 | Out-Null
 "@
-                                        $kerbTestFile = Join-Path ([System.IO.Path]::GetTempPath()) `
-                                            "Verify-WitnessMount-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
-                                        $kerbTestScript | Set-Content -Path $kerbTestFile -Encoding UTF8 -NoNewline
+                                        $maxAttempts = 3
+                                        $mountSuccess = $false
+                                        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                                            if ($attempt -gt 1) {
+                                                Write-Host "   Waiting 15 seconds for AD replication before retry ($attempt/$maxAttempts)..." -ForegroundColor Yellow
+                                                Start-Sleep -Seconds 15
+                                            }
 
-                                        $verifyResult = az vm run-command invoke `
-                                            -g $testRg -n $testVm `
-                                            --command-id RunPowerShellScript `
-                                            --scripts "@$kerbTestFile" `
-                                            --query "value[0].message" -o tsv 2>&1
+                                            $kerbTestFile = Join-Path ([System.IO.Path]::GetTempPath()) `
+                                                "Verify-WitnessMount-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+                                            $kerbTestScript | Set-Content -Path $kerbTestFile -Encoding UTF8 -NoNewline
 
-                                        Remove-Item $kerbTestFile -Force -ErrorAction SilentlyContinue
+                                            $verifyResult = az vm run-command invoke `
+                                                -g $testRg -n $testVm `
+                                                --command-id RunPowerShellScript `
+                                                --scripts "@$kerbTestFile" `
+                                                --query "value[0].message" -o tsv 2>&1
 
-                                        if ($verifyResult -match 'MOUNT_EXIT=0') {
-                                            Write-Ok "Kerberos SMB mount verified — File Share Witness is ready"
-                                        } else {
-                                            Write-Fail "Mount verification failed."
+                                            Remove-Item $kerbTestFile -Force -ErrorAction SilentlyContinue
+
+                                            if ($verifyResult -match 'MOUNT_EXIT=0') {
+                                                Write-Ok "Kerberos SMB mount verified (attempt $attempt) — File Share Witness is ready"
+                                                $mountSuccess = $true
+                                                break
+                                            } else {
+                                                Write-Host "   Attempt $attempt/$maxAttempts failed" -ForegroundColor Yellow
+                                            }
+                                        }
+                                        if (-not $mountSuccess) {
+                                            Write-Fail "Mount verification failed after $maxAttempts attempts."
                                             $verifyResult -split "`n" | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray }
                                             Write-Host "   This may resolve after AD replication completes. Verify manually:" -ForegroundColor Yellow
                                             Write-Host "   net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Yellow

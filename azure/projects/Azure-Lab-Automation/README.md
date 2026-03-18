@@ -714,16 +714,18 @@ The File Share Witness storage account is deployed during Tier 1 with shared key
 
 **This step is automated by `deploy.ps1`** — when deploying Tier 2 or higher with domain join enabled, the script automatically:
 
-1. Discovers the witness storage account by tag (`workload=file-share-witness`) in `{base}-rg-identity`
-2. Temporarily enables shared key access (required to generate the Kerberos key)
-3. Generates and retrieves the `kerb1` Kerberos key
-4. Runs `Register-StorageInAD.ps1` on DC01 via RunCommand — creates a computer account in AD, sets the AES-256 Kerberos key with the correct salt, and registers the `cifs` SPN
-5. Configures the storage account with AD DS identity (domain GUID, SID, forest name)
-6. Flushes the KDC cache on DC02 (DC01's KDC is restarted by the script)
-7. Verifies the Kerberos SMB mount from a domain-joined AOAG SQL node
-8. Re-disables shared key data-plane access
+1. **Preserves existing AD DS config** — before deploying Bicep, the script snapshots any existing `azureFilesIdentityBasedAuthentication` settings on the witness storage account. After the Bicep deployment (which resets them to `null`), the saved config is immediately restored. This prevents unnecessary kerb1 key regeneration on redeployments.
+2. Discovers the witness storage account by tag (`workload=file-share-witness`) in `{base}-rg-identity`
+3. **Skips registration if already configured** — if AD DS authentication is already enabled (either preserved from step 1 or from a previous deployment), the entire registration is skipped
+4. Temporarily enables shared key access (required to generate the Kerberos key)
+5. Generates and retrieves the `kerb1` Kerberos key
+6. Runs `Register-StorageInAD.ps1` on DC01 via RunCommand — creates a computer account in AD, sets the AES-256 Kerberos key with the correct salt, and registers the `cifs` SPN
+7. Configures the storage account with AD DS identity (domain GUID, SID, forest name)
+8. **Flushes KDC cache on ALL Domain Controllers** — discovers DCs by Azure VM tag (`role=domain-controller`) and restarts the KDC service on each. This ensures site DCs (dc03, dc04, dc05) also pick up the new AES key immediately rather than serving stale cached keys.
+9. Verifies the Kerberos SMB mount from a domain-joined AOAG SQL node (**with retry** — up to 3 attempts with 15-second delay to accommodate AD replication)
+10. Re-disables shared key data-plane access
 
-If the storage account is already registered (re-running an incremental deploy), the step is skipped automatically.
+> **Redeployment safety:** On redeployments, `deploy.ps1` preserves the AD DS identity configuration across the Bicep PUT operation. This eliminates the window where a regenerated kerb1 key hasn't propagated to all DCs — the primary cause of error 1396 on redeployment.
 
 > **Manual fallback:** If the automated registration fails (e.g., DC01 not reachable), the script logs a warning and continues. You can re-run the deployment — the registration will be retried. To troubleshoot, check the RunCommand output in the Azure Portal for DC01.
 
@@ -739,7 +741,10 @@ If the storage account is already registered (re-running an incremental deploy),
 .\Register-WitnessStorage.ps1 -BaseName azlab -Force
 ```
 
-> **Error 1396** ("target account name is incorrect") during mount verification indicates an AES-256 key mismatch. Re-running with `-Force` will regenerate the key and re-register.
+> **Error 1396** ("target account name is incorrect") during mount verification indicates an AES-256 key mismatch between the storage account's kerb1 key and the AD computer account's AES key. Common causes:
+> - **Stale KDC cache** on a site DC — `Register-WitnessStorage.ps1 -Force` will flush all DCs
+> - **Redeployment wiped AD DS config** — now prevented by the save/restore logic in `deploy.ps1`
+> - **AD replication latency** — the mount retry loop (3 attempts, 15s delay) handles this
 
 #### 6b. Create Failover Cluster and Configure Quorum
 1. Enable the **Failover Clustering** feature on both AOAG SQL nodes

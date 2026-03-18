@@ -107,6 +107,13 @@ resource stg 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
   parent: stg
   name: 'default'
+  properties: {
+    protocolSettings: {
+      smb: {
+        kerberosTicketEncryption: 'AES-256'
+      }
+    }
+  }
 }
 
 resource share 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {

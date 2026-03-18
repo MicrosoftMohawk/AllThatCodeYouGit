@@ -48,7 +48,7 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module ActiveDirectory
 
-# ── Derive values ─────────────────────────────────────────────────────────────
+# -- Derive values -------------------------------------------------------------
 $domain = Get-ADDomain -Identity $DomainName
 $domainGuid = $domain.ObjectGuid.ToString()
 $domainSid = $domain.DomainSID.Value
@@ -71,12 +71,12 @@ if ([string]::IsNullOrWhiteSpace($OUPath)) {
 }
 
 # Convert the storage Kerberos key to a SecureString password.
-# The key from Azure (kerb1) is a base64 string — use it directly as the
+# The key from Azure (kerb1) is a base64 string -- use it directly as the
 # computer account password.  This matches what Azure validates when issuing
 # Kerberos tickets.  Do NOT base64-decode it first.
 $securePassword = ConvertTo-SecureString -String $StorageKerbKey -AsPlainText -Force
 
-# ── Create or update the computer account ─────────────────────────────────────
+# -- Create or update the computer account -------------------------------------
 $existingComputer = Get-ADComputer -Filter "SamAccountName -eq '$samName$'" -ErrorAction SilentlyContinue
 
 if ($existingComputer) {
@@ -98,15 +98,15 @@ if ($existingComputer) {
     $computer = Get-ADComputer -Identity $samName -Properties SID
 }
 
-# ── Fix AES256 salt mismatch ──────────────────────────────────────────────────
+# -- Fix AES256 salt mismatch -------------------------------------------------
 # When Set-ADAccountPassword sets the password, the DC derives AES keys using
 # a salt based on the computer account's default principal:
-#   <REALM>host<samName_no_$>.<domain>  →  e.g. TS11.LABhostartifactsstgujl.ts11.lab
+#   <REALM>host<samName_no_$>.<domain>
 #
 # Azure Files derives its AES keys using a salt based on the cifs SPN:
 #   <REALM><cifs/storage.file.core.windows.net>
 #
-# These salts differ → different AES keys → Kerberos ticket decryption fails
+# These salts differ -> different AES keys -> Kerberos ticket decryption fails
 # (error 1396 "target account name is incorrect").
 #
 # Fix: Use ktpass to set the account's UPN to the cifs principal.  This changes
@@ -153,7 +153,7 @@ if ($ktpassExit -ne 0) {
 # Ensure only AES256 encryption is advertised
 Set-ADComputer -Identity $computer -Replace @{'msDS-SupportedEncryptionTypes' = 16}
 
-# Flush the KDC's cached key material.  The password was set twice — first by
+# Flush the KDC's cached key material.  The password was set twice -- first by
 # New-ADComputer/Set-ADAccountPassword (default salt) then by ktpass (correct
 # salt).  The KDC may cache the first key and not pick up the ktpass update
 # until the service restarts.
@@ -166,7 +166,7 @@ Write-Host "AD replication triggered"
 
 $azureStorageSid = $computer.SID.Value
 
-# ── Output results as JSON ────────────────────────────────────────────────────
+# -- Output results as JSON ----------------------------------------------------
 $result = @{
     domainGuid        = $domainGuid
     domainSid         = $domainSid

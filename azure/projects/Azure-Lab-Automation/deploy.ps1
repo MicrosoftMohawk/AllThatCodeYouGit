@@ -1650,12 +1650,12 @@ Write-Host "MOUNT_EXIT=`$LASTEXITCODE"
 `$r | ForEach-Object { Write-Host `$_ }
 net use Z: /delete 2>&1 | Out-Null
 "@
-                                        $maxAttempts = 3
+                                        $maxAttempts = 5
                                         $mountSuccess = $false
                                         for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
                                             if ($attempt -gt 1) {
-                                                Write-Host "   Waiting 15 seconds for AD replication before retry ($attempt/$maxAttempts)..." -ForegroundColor Yellow
-                                                Start-Sleep -Seconds 15
+                                                Write-Host "   Waiting 30 seconds for AD replication before retry ($attempt/$maxAttempts)..." -ForegroundColor Yellow
+                                                Start-Sleep -Seconds 30
                                             }
 
                                             $kerbTestFile = Join-Path ([System.IO.Path]::GetTempPath()) `

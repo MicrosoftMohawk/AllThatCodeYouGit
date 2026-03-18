@@ -9,7 +9,7 @@
     you need to register (or re-register) the witness storage account in AD
     without re-running the full deployment.
 
-    The script automatically:
+    Follows the same proven flow as the ArtifactsStorage deploy.ps1:
       1. Discovers the witness storage account by tag in {base}-rg-identity
       2. Auto-detects the AD domain name from DC01
       3. Temporarily enables shared key access
@@ -18,7 +18,8 @@
       6. Configures the storage account with AD DS identity
       7. Flushes KDC cache on DC02
       8. Verifies Kerberos SMB mount from an AOAG SQL node
-      9. Re-disables shared key access
+      9. On failure: regenerates kerb key, re-registers, retries
+     10. Re-disables shared key access
 
 .PARAMETER BaseName
     Base name prefix used during lab deployment (e.g., "azlab").
@@ -74,7 +75,7 @@ function Write-Fail   { param([string]$Message) Write-Host "   [FAIL] $Message" 
 # =============================================================================
 # 1. Prerequisites
 # =============================================================================
-Write-Header "Register File Share Witness — Prerequisites"
+Write-Header "Register File Share Witness -- Prerequisites"
 
 # --- Azure CLI ----------------------------------------------------------------
 Write-Step "Checking Azure CLI..."
@@ -107,6 +108,8 @@ try {
 }
 
 # --- Subscription selection ---------------------------------------------------
+$rgIdentity = "$BaseName-rg-identity"
+
 if ($SubscriptionId) {
     Write-Step "Setting subscription to $SubscriptionId..."
     az account set --subscription $SubscriptionId
@@ -115,13 +118,56 @@ if ($SubscriptionId) {
     Write-Ok "$($currentSub.name) ($($currentSub.id))"
 } else {
     $currentSub = az account show --query "{name:name, id:id}" -o json | ConvertFrom-Json
-    Write-Ok "Subscription: $($currentSub.name) ($($currentSub.id))"
+    Write-Step "Checking subscription '$($currentSub.name)' for resource group $rgIdentity..."
+    $rgCheck = az group exists --name $rgIdentity -o tsv 2>&1
+    if ($rgCheck -ne 'true') {
+        Write-Host "   Resource group '$rgIdentity' not found in current subscription." -ForegroundColor Yellow
+        Write-Step "Searching all accessible subscriptions for $rgIdentity..."
+        $allSubs = az account list --query "[?state=='Enabled'].{name:name, id:id}" -o json 2>&1 | ConvertFrom-Json
+        $matchingSubs = @()
+        foreach ($sub in $allSubs) {
+            if ($sub.id -eq $currentSub.id) { continue }
+            az account set --subscription $sub.id 2>&1 | Out-Null
+            $found = az group exists --name $rgIdentity -o tsv 2>&1
+            if ($found -eq 'true') {
+                $matchingSubs += $sub
+            }
+        }
+        if ($matchingSubs.Count -eq 1) {
+            $picked = $matchingSubs[0]
+            az account set --subscription $picked.id
+            $currentSub = $picked
+            Write-Ok "Found in subscription: $($picked.name) ($($picked.id))"
+        } elseif ($matchingSubs.Count -gt 1) {
+            Write-Host ""
+            Write-Host "   Found '$rgIdentity' in multiple subscriptions:" -ForegroundColor Cyan
+            for ($i = 0; $i -lt $matchingSubs.Count; $i++) {
+                Write-Host "     [$($i + 1)] $($matchingSubs[$i].name)  ($($matchingSubs[$i].id))" -ForegroundColor White
+            }
+            $choice = Read-Host "   Select subscription (1-$($matchingSubs.Count))"
+            $idx = [int]$choice - 1
+            if ($idx -lt 0 -or $idx -ge $matchingSubs.Count) {
+                Write-Fail "Invalid selection."
+                exit 1
+            }
+            $picked = $matchingSubs[$idx]
+            az account set --subscription $picked.id
+            $currentSub = $picked
+            Write-Ok "Using subscription: $($picked.name) ($($picked.id))"
+        } else {
+            az account set --subscription $currentSub.id 2>&1 | Out-Null
+            Write-Fail "Resource group '$rgIdentity' not found in any accessible subscription."
+            Write-Host "   Ensure the lab has been deployed with BaseName '$BaseName'." -ForegroundColor Yellow
+            exit 1
+        }
+    } else {
+        Write-Ok "Subscription: $($currentSub.name) ($($currentSub.id))"
+    }
 }
 
 # =============================================================================
 # 2. Discover witness storage account
 # =============================================================================
-$rgIdentity = "$BaseName-rg-identity"
 $dcVmName   = "$BaseName-dc01"
 $dc02VmName = "$BaseName-dc02"
 
@@ -149,7 +195,7 @@ if (($addsEnabled -eq 'AADDS' -or $addsEnabled -eq 'AD') -and -not $Force) {
     exit 0
 }
 if ($Force -and ($addsEnabled -eq 'AADDS' -or $addsEnabled -eq 'AD')) {
-    Write-Host "   -Force specified — re-registering despite existing AD DS config." -ForegroundColor Yellow
+    Write-Host "   -Force specified -- re-registering despite existing AD DS config." -ForegroundColor Yellow
 }
 
 # =============================================================================
@@ -206,17 +252,15 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$witnessKerbKey = az storage account keys list `
+$kerbKey = az storage account keys list `
     --account-name $witnessStgName -g $rgIdentity `
-    --expand-key-type kerb `
     --query "[?keyName=='kerb1'].value" -o tsv 2>&1
-$witnessKerbKey = ("$witnessKerbKey").Trim()
-
-if ([string]::IsNullOrWhiteSpace($witnessKerbKey)) {
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($kerbKey)) {
     Write-Fail "Failed to retrieve Kerberos key."
     exit 1
 }
-Write-Ok "Kerberos key generated"
+$kerbKey = $kerbKey.Trim()
+Write-Ok "Kerberos key generated (kerb1)"
 
 # =============================================================================
 # 6. Run Register-StorageInAD.ps1 on DC01 via RunCommand
@@ -229,28 +273,30 @@ if (-not (Test-Path $adScriptPath)) {
     exit 1
 }
 
+# Read the script, strip the <# #> comment block and param() block.
+# az vm run-command invoke doesn't reliably bind to PowerShell param() blocks
+# when using @file.  Instead, we prepend variable assignments directly.
 $adScriptContent = Get-Content $adScriptPath -Raw
-# Strip comment block and param() block (az vm run-command doesn't bind params)
 $adScriptContent = $adScriptContent -replace '(?s)<#.*?#>\s*', ''
 $adScriptContent = $adScriptContent -replace '(?sm)param\s*\(.*?^\)\s*', ''
 
-# Prepend variable assignments
+# Prepend variable assignments with the actual values
 $domainDNParts = ($DomainName -split '\.' | ForEach-Object { "DC=$_" }) -join ','
-$witnessOUPath = "OU=Storage Accounts,OU=Lab Servers,$domainDNParts"
+$ouPath = "OU=Storage Accounts,OU=Lab Servers,$domainDNParts"
 $preamble = @"
 `$StorageAccountName = '$($witnessStgName -replace "'","''")'
-`$StorageKerbKey = '$($witnessKerbKey -replace "'","''")'
+`$StorageKerbKey = '$($kerbKey -replace "'","''")'
 `$DomainName = '$($DomainName -replace "'","''")'
-`$OUPath = '$($witnessOUPath -replace "'","''")'
+`$OUPath = '$($ouPath -replace "'","''")'
 
 "@
 $adScriptContent = $preamble + $adScriptContent
 
-$tempScript = Join-Path ([System.IO.Path]::GetTempPath()) `
-    "Register-WitnessInAD-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+# Write to temp file and invoke via @file
+$tempScript = Join-Path ([System.IO.Path]::GetTempPath()) "Register-WitnessInAD-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
 $adScriptContent | Set-Content -Path $tempScript -Encoding UTF8 -NoNewline
 
-$resultRaw = az vm run-command invoke `
+$adResultRaw = az vm run-command invoke `
     --resource-group $rgIdentity `
     --name $dcVmName `
     --command-id RunPowerShellScript `
@@ -259,35 +305,46 @@ $resultRaw = az vm run-command invoke `
 
 Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
 
-# Parse the JSON response
-$resultText = ($resultRaw | ForEach-Object { "$_" }) -join "`n"
+# Parse the full JSON response to get both stdout and stderr
+$adResultText = ($adResultRaw | ForEach-Object { "$_" }) -join "`n"
 try {
-    $resultJson = $resultText | ConvertFrom-Json
-    $stdout = $resultJson.value | Where-Object { $_.code -match 'StdOut' } | Select-Object -ExpandProperty message
-    $stderr = $resultJson.value | Where-Object { $_.code -match 'StdErr' } | Select-Object -ExpandProperty message
+    $adResultJson = $adResultText | ConvertFrom-Json
+    $stdout = $adResultJson.value | Where-Object { $_.code -match 'StdOut' } | Select-Object -ExpandProperty message
+    $stderr = $adResultJson.value | Where-Object { $_.code -match 'StdErr' } | Select-Object -ExpandProperty message
 } catch {
-    $stdout = $resultText
+    $stdout = $adResultText
     $stderr = ''
+}
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "AD registration failed on DC01."
+    if ($stderr) { Write-Host "   stderr: $stderr" -ForegroundColor Gray }
+    if ($stdout) { Write-Host "   stdout: $stdout" -ForegroundColor Gray }
+    az storage account update --name $witnessStgName -g $rgIdentity --allow-shared-key-access false -o none 2>&1 | Out-Null
+    exit 1
 }
 
 $jsonMatch = [regex]::Match($stdout, 'AD_REGISTRATION_RESULT=(.+)')
 if (-not $jsonMatch.Success) {
-    Write-Fail "AD registration failed on DC01."
-    if ($stdout) { Write-Host "   --- stdout ---" -ForegroundColor Gray; ($stdout -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray } }
-    if ($stderr) { Write-Host "   --- stderr ---" -ForegroundColor Gray; ($stderr -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Red } }
-    # Re-disable shared key access before exiting
+    Write-Fail "Could not parse AD registration output."
+    Write-Host "   --- DC01 stdout ---" -ForegroundColor Gray
+    if ($stdout) { ($stdout -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray } }
+    Write-Host "   --- DC01 stderr ---" -ForegroundColor Gray
+    if ($stderr) { ($stderr -split "`n") | ForEach-Object { Write-Host "   $_" -ForegroundColor Red } }
+    Write-Host "   --- end ---" -ForegroundColor Gray
     az storage account update --name $witnessStgName -g $rgIdentity --allow-shared-key-access false -o none 2>&1 | Out-Null
     exit 1
 }
 
+$capturedJson = $jsonMatch.Groups[1].Value
 try {
-    $adInfo = $jsonMatch.Groups[1].Value | ConvertFrom-Json
+    $adInfo = $capturedJson | ConvertFrom-Json
 } catch {
-    Write-Fail "Failed to parse AD registration JSON: $($jsonMatch.Groups[1].Value)"
+    Write-Fail "Failed to parse AD registration JSON."
+    Write-Host "   captured value: $capturedJson" -ForegroundColor Gray
     az storage account update --name $witnessStgName -g $rgIdentity --allow-shared-key-access false -o none 2>&1 | Out-Null
     exit 1
 }
-
 Write-Ok "Computer account: $($adInfo.computerName)"
 Write-Ok "SPN: $($adInfo.spn)"
 Write-Ok "Azure Storage SID: $($adInfo.azureStorageSid)"
@@ -296,6 +353,7 @@ Write-Ok "Azure Storage SID: $($adInfo.azureStorageSid)"
 # 7. Configure storage account with AD DS identity
 # =============================================================================
 Write-Step "Configuring storage account for AD DS authentication..."
+
 az storage account update `
     --name $witnessStgName -g $rgIdentity `
     --enable-files-adds true `
@@ -318,65 +376,29 @@ if ($LASTEXITCODE -ne 0) {
 Write-Ok "AD DS authentication enabled on witness storage account"
 
 # =============================================================================
-# 8. Flush KDC cache on ALL Domain Controllers
+# 8. Flush KDC cache on DC02
 # =============================================================================
-# Register-StorageInAD.ps1 flushed DC01's KDC and ran repadmin /syncall, but
-# other DCs (especially site DCs like dc03/dc04/dc05) may still cache the old
-# AES key.  Discovery via VM tags covers any number of DCs automatically.
-# =============================================================================
-Write-Step "Flushing KDC cache on all Domain Controllers..."
-$allDcVmsJson = az vm list `
-    --query "[?tags.role=='domain-controller'].{name:name, rg:resourceGroup}" `
-    -o json 2>&1
-$allDcVms = @()
-try { $allDcVms = ($allDcVmsJson | Out-String) | ConvertFrom-Json } catch {}
-
-if ($allDcVms.Count -eq 0) {
-    # Fallback: flush DC02 only (original behaviour)
-    Write-Host "   Could not discover DCs by tag — flushing DC02 only" -ForegroundColor Yellow
-    az vm run-command invoke `
-        --resource-group $rgIdentity `
-        --name $dc02VmName `
-        --command-id RunPowerShellScript `
-        --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
-        --query "value[0].message" -o tsv 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "DC02 KDC cache flushed"
-    } else {
-        Write-Host "   Warning: could not restart KDC on DC02." -ForegroundColor Yellow
-    }
+# Register-StorageInAD.ps1 restarted DC01's KDC after ktpass and triggered
+# repadmin /syncall.  DC02 received the new key via replication but its KDC
+# may still cache the old AES key.  A KDC restart ensures it issues valid
+# service tickets.
+Write-Step "Flushing KDC cache on DC02..."
+az vm run-command invoke `
+    --resource-group $rgIdentity `
+    --name $dc02VmName `
+    --command-id RunPowerShellScript `
+    --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
+    --query "value[0].message" -o tsv 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "DC02 KDC cache flushed"
 } else {
-    $kdcOk = 0; $kdcFail = 0
-    foreach ($dc in $allDcVms) {
-        # Skip DC01 — already flushed by Register-StorageInAD.ps1
-        if ($dc.name -eq $dcVmName) { $kdcOk++; continue }
-        Write-Host "   Restarting KDC on $($dc.name)..." -ForegroundColor White -NoNewline
-        az vm run-command invoke `
-            --resource-group $dc.rg `
-            --name $dc.name `
-            --command-id RunPowerShellScript `
-            --scripts "Restart-Service kdc -Force; Write-Host 'KDC restarted'" `
-            --query "value[0].message" -o tsv 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host " OK" -ForegroundColor Green
-            $kdcOk++
-        } else {
-            Write-Host " FAILED" -ForegroundColor Red
-            $kdcFail++
-        }
-    }
-    if ($kdcFail -eq 0) {
-        Write-Ok "KDC flushed on all $($allDcVms.Count) DCs (DC01 flushed during registration)"
-    } else {
-        Write-Host "   Warning: $kdcFail DC(s) failed KDC restart. SMB may fail from those sites." -ForegroundColor Yellow
-    }
+    Write-Host "   Warning: could not restart KDC on DC02. SMB mount may fail from some VMs until DC02 caches refresh." -ForegroundColor Yellow
 }
 
 # =============================================================================
 # 9. Verify Kerberos SMB mount from a domain-joined VM
 # =============================================================================
 if (-not $SkipVerify) {
-    # Find a running AOAG SQL node to test from
     $testRg = "$BaseName-rg-site2"
     $testVmCandidates = @("$BaseName-sqc1", "$BaseName-sqc2")
     $testVm = $null
@@ -397,8 +419,12 @@ if (-not $SkipVerify) {
         Write-Host "   No running AOAG SQL node found. Skipping mount verification." -ForegroundColor Yellow
         Write-Host "   Verify manually: net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Yellow
     } else {
-        Write-Step "Testing Kerberos SMB mount from $testVm..."
-        $kerbTestScript = @"
+        $kerbVerifyScript = Join-Path ([System.IO.Path]::GetTempPath()) `
+            "Verify-WitnessMount-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+
+        # Build mount-test script.  $witnessStgName is expanded now;
+        # everything else stays literal inside the remote script.
+        $kerbVerifyContent = @"
 klist purge 2>&1 | Out-Null
 net use * /delete /y 2>&1 | Out-Null
 Start-Sleep -Seconds 2
@@ -407,39 +433,105 @@ Write-Host "MOUNT_EXIT=`$LASTEXITCODE"
 `$r | ForEach-Object { Write-Host `$_ }
 net use Z: /delete 2>&1 | Out-Null
 "@
-        $maxAttempts = 3
-        $mountSuccess = $false
-        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            if ($attempt -gt 1) {
-                Write-Host "   Waiting 15 seconds for AD replication before retry ($attempt/$maxAttempts)..." -ForegroundColor Yellow
-                Start-Sleep -Seconds 15
+
+        $kerbVerified = $false
+        $maxRetries   = 1
+
+        for ($attempt = 0; $attempt -le $maxRetries; $attempt++) {
+
+            # -- On retry: regenerate kerb key, re-register in AD, flush KDCs --
+            if ($attempt -gt 0) {
+                Write-Step "Retry $attempt/$maxRetries -- regenerating Kerberos key and re-registering in AD..."
+
+                az storage account keys renew `
+                    --account-name $witnessStgName -g $rgIdentity `
+                    --key key1 --key-type kerb -o none 2>&1
+                $kerbKey = (az storage account keys list `
+                    --account-name $witnessStgName -g $rgIdentity `
+                    --query "[?keyName=='kerb1'].value" -o tsv 2>&1).Trim()
+
+                if ([string]::IsNullOrWhiteSpace($kerbKey)) {
+                    Write-Fail "Could not retrieve new Kerberos key. Aborting verification."
+                    break
+                }
+
+                # Re-run the AD registration script with the fresh key
+                $retryScriptContent = Get-Content $adScriptPath -Raw
+                $retryScriptContent = $retryScriptContent -replace '(?s)<#.*?#>\s*', ''
+                $retryScriptContent = $retryScriptContent -replace '(?sm)param\s*\(.*?^\)\s*', ''
+                $retryPreamble = @"
+`$StorageAccountName = '$($witnessStgName -replace "'","''")'
+`$StorageKerbKey = '$($kerbKey -replace "'","''")'
+`$DomainName = '$($DomainName -replace "'","''")'
+`$OUPath = '$($ouPath -replace "'","''")'
+
+"@
+                $retryScriptContent = $retryPreamble + $retryScriptContent
+                $retryScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) `
+                    "Register-WitnessInAD-retry-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+                $retryScriptContent | Set-Content -Path $retryScriptPath -Encoding UTF8 -NoNewline
+
+                $retryResult = az vm run-command invoke `
+                    -g $rgIdentity -n $dcVmName `
+                    --command-id RunPowerShellScript `
+                    --scripts "@$retryScriptPath" `
+                    --query "value[0].message" -o tsv 2>&1
+                Remove-Item $retryScriptPath -Force -ErrorAction SilentlyContinue
+
+                if ($retryResult -notmatch 'AD_REGISTRATION_RESULT=') {
+                    Write-Fail "AD re-registration failed on DC01."
+                    $retryResult -split "`n" | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray }
+                    break
+                }
+                Write-Ok "AD re-registration succeeded"
+
+                # Restart KDC on both DCs
+                az vm run-command invoke -g $rgIdentity -n $dcVmName `
+                    --command-id RunPowerShellScript `
+                    --scripts "Restart-Service kdc -Force" `
+                    --query "value[0].message" -o tsv 2>&1 | Out-Null
+                az vm run-command invoke -g $rgIdentity -n $dc02VmName `
+                    --command-id RunPowerShellScript `
+                    --scripts "Restart-Service kdc -Force" `
+                    --query "value[0].message" -o tsv 2>&1 | Out-Null
+                Write-Ok "KDC restarted on both DCs"
+
+                Start-Sleep -Seconds 5
             }
 
-            $kerbTestFile = Join-Path ([System.IO.Path]::GetTempPath()) `
-                "Verify-WitnessMount-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
-            $kerbTestScript | Set-Content -Path $kerbTestFile -Encoding UTF8 -NoNewline
+            # -- Run the mount test -----------------------------------------------
+            $kerbVerifyContent | Set-Content -Path $kerbVerifyScript -Encoding UTF8 -NoNewline
 
+            Write-Step "$(if ($attempt -eq 0) { 'Testing' } else { 'Re-testing' }) Kerberos SMB mount from $testVm..."
             $verifyResult = az vm run-command invoke `
                 -g $testRg -n $testVm `
                 --command-id RunPowerShellScript `
-                --scripts "@$kerbTestFile" `
+                --scripts "@$kerbVerifyScript" `
                 --query "value[0].message" -o tsv 2>&1
 
-            Remove-Item $kerbTestFile -Force -ErrorAction SilentlyContinue
-
             if ($verifyResult -match 'MOUNT_EXIT=0') {
-                Write-Ok "Kerberos SMB mount verified (attempt $attempt) — File Share Witness is ready for WSFC quorum"
-                $mountSuccess = $true
+                Write-Ok "Kerberos SMB mount verified -- File Share Witness is ready for WSFC quorum"
+                $kerbVerified = $true
                 break
-            } else {
-                Write-Host "   Attempt $attempt/$maxAttempts failed" -ForegroundColor Yellow
             }
-        }
-        if (-not $mountSuccess) {
-            Write-Fail "Mount verification failed after $maxAttempts attempts."
+
+            if ($attempt -lt $maxRetries) {
+                Write-Fail "Mount failed (AES-256 key mismatch likely) -- will retry with fresh key"
+            } else {
+                Write-Fail "Mount failed after $($maxRetries + 1) attempts"
+            }
             $verifyResult -split "`n" | ForEach-Object { Write-Host "   $_" -ForegroundColor Gray }
-            Write-Host "   This may resolve after AD replication completes. Retry or verify manually:" -ForegroundColor Yellow
-            Write-Host "   net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Yellow
+        }
+
+        Remove-Item $kerbVerifyScript -Force -ErrorAction SilentlyContinue
+
+        if (-not $kerbVerified) {
+            Write-Host ""
+            Write-Host "   WARNING: Kerberos SMB verification failed." -ForegroundColor Red
+            Write-Host "   Debug steps:" -ForegroundColor Yellow
+            Write-Host "     1. RDP to $testVm: net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Gray
+            Write-Host "     2. On DC01: Get-ADComputer -Filter {SamAccountName -like '$($witnessStgName.Substring(0,[Math]::Min(15,$witnessStgName.Length)))*'} -Properties userPrincipalName, msDS-SupportedEncryptionTypes, PasswordLastSet | Format-List" -ForegroundColor Gray
+            Write-Host "     3. Re-run: .\Register-WitnessStorage.ps1 -BaseName $BaseName -Force" -ForegroundColor Gray
         }
     }
 }

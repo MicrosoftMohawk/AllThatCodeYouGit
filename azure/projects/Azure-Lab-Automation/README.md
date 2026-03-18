@@ -719,10 +719,10 @@ The File Share Witness storage account is deployed during Tier 1 with shared key
 3. **Skips registration if already configured** — if AD DS authentication is already enabled (either preserved from step 1 or from a previous deployment), the entire registration is skipped
 4. Temporarily enables shared key access (required to generate the Kerberos key)
 5. Generates and retrieves the `kerb1` Kerberos key
-6. Runs `Register-StorageInAD.ps1` on DC01 via RunCommand — creates a computer account in AD, sets the AES-256 Kerberos key with the correct salt, and registers the `cifs` SPN
+6. Runs `Register-StorageInAD.ps1` on DC01 via RunCommand — creates a computer account DISABLED in AD, then uses `ktpass` as the single password-setting operation to set the AES-256 key with the correct salt, then enables the account. Also cleans up any leftover service logon accounts from previous troubleshooting.
 7. Configures the storage account with AD DS identity (domain GUID, SID, forest name)
 8. **Flushes KDC cache on ALL Domain Controllers** — discovers DCs by Azure VM tag (`role=domain-controller`) and restarts the KDC service on each. This ensures site DCs (dc03, dc04, dc05) also pick up the new AES key immediately rather than serving stale cached keys.
-9. Verifies the Kerberos SMB mount from a domain-joined AOAG SQL node (**with retry** — up to 3 attempts with 15-second delay to accommodate AD replication)
+9. Verifies the Kerberos SMB mount from a domain-joined AOAG SQL node (**with retry** — up to 5 attempts with 30-second delay to accommodate AD replication)
 10. Re-disables shared key data-plane access
 
 > **Redeployment safety:** On redeployments, `deploy.ps1` preserves the AD DS identity configuration across the Bicep PUT operation. This eliminates the window where a regenerated kerb1 key hasn't propagated to all DCs — the primary cause of error 1396 on redeployment.
@@ -744,7 +744,7 @@ The File Share Witness storage account is deployed during Tier 1 with shared key
 > **Error 1396** ("target account name is incorrect") during mount verification indicates an AES-256 key mismatch between the storage account's kerb1 key and the AD computer account's AES key. Common causes:
 > - **Stale KDC cache** on a site DC — `Register-WitnessStorage.ps1 -Force` will flush all DCs
 > - **Redeployment wiped AD DS config** — now prevented by the save/restore logic in `deploy.ps1`
-> - **AD replication latency** — the mount retry loop (3 attempts, 15s delay) handles this
+> - **AD replication latency** — the mount retry loop (5 attempts, 30s delay) handles this
 
 #### 6b. Create Failover Cluster and Configure Quorum
 1. Enable the **Failover Clustering** feature on both AOAG SQL nodes

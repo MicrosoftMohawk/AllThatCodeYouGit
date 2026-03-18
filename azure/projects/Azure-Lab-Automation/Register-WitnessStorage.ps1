@@ -104,7 +104,23 @@ try {
     az login
     if ($LASTEXITCODE -ne 0) { Write-Fail "Login failed."; exit 1 }
     $account = az account show 2>&1 | ConvertFrom-Json
-    Write-Ok "Logged in as $($account.user.name)"
+    Write-Ok "Logged in as $($account.user.name) (tenant: $($account.tenantId))"
+}
+
+# Prompt user to confirm the session account is correct
+Write-Host ""
+Write-Host "   Current session:" -ForegroundColor Cyan
+Write-Host "     Account : $($account.user.name)" -ForegroundColor White
+Write-Host "     Tenant  : $($account.tenantId)" -ForegroundColor White
+Write-Host "     Sub     : $($account.name)" -ForegroundColor White
+Write-Host ""
+$sessionChoice = Read-Host "   Is this the correct account? [Y] Yes  [N] No, log in with a different account  (default: Y)"
+if ($sessionChoice -and $sessionChoice.Trim().ToUpper() -eq 'N') {
+    Write-Host "   Opening browser login for a different account..." -ForegroundColor Yellow
+    az login
+    if ($LASTEXITCODE -ne 0) { Write-Fail "Login failed."; exit 1 }
+    $account = az account show 2>&1 | ConvertFrom-Json
+    Write-Ok "Now logged in as $($account.user.name) (tenant: $($account.tenantId))"
 }
 
 # --- Subscription selection ---------------------------------------------------
@@ -529,7 +545,7 @@ net use Z: /delete 2>&1 | Out-Null
             Write-Host ""
             Write-Host "   WARNING: Kerberos SMB verification failed." -ForegroundColor Red
             Write-Host "   Debug steps:" -ForegroundColor Yellow
-            Write-Host "     1. RDP to $testVm: net use Z: \\$witnessStgName.file.core.windows.net\witness" -ForegroundColor Gray
+            Write-Host "     1. RDP to ${testVm}: net use Z: \\${witnessStgName}.file.core.windows.net\witness" -ForegroundColor Gray
             Write-Host "     2. On DC01: Get-ADComputer -Filter {SamAccountName -like '$($witnessStgName.Substring(0,[Math]::Min(15,$witnessStgName.Length)))*'} -Properties userPrincipalName, msDS-SupportedEncryptionTypes, PasswordLastSet | Format-List" -ForegroundColor Gray
             Write-Host "     3. Re-run: .\Register-WitnessStorage.ps1 -BaseName $BaseName -Force" -ForegroundColor Gray
         }

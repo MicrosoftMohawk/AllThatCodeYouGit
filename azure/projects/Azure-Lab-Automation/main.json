@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "18123647978202145427"
+      "templateHash": "6546678967159314015"
     }
   },
   "parameters": {
@@ -1841,7 +1841,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "13559770146588580610"
+              "templateHash": "3225811255990418573"
             }
           },
           "parameters": {
@@ -1974,6 +1974,13 @@
               "type": "Microsoft.Storage/storageAccounts/fileServices",
               "apiVersion": "2023-05-01",
               "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
+              "properties": {
+                "protocolSettings": {
+                  "smb": {
+                    "kerberosTicketEncryption": "AES-256"
+                  }
+                }
+              },
               "dependsOn": [
                 "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
               ]

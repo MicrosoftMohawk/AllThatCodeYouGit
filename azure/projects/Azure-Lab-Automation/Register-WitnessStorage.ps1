@@ -4,10 +4,10 @@
     Enables Kerberos SMB authentication for WSFC quorum from domain-joined VMs.
 
 .DESCRIPTION
-    Standalone script that performs the same witness registration as deploy.ps1's
-    Tier 2 post-deployment step.  Use this when the lab is already deployed and
-    you need to register (or re-register) the witness storage account in AD
-    without re-running the full deployment.
+    Standalone post-deployment script that registers the File Share Witness
+    storage account in Active Directory.  Run this after deploy.ps1 completes
+    (Tier 2+) to enable Kerberos SMB authentication for the WSFC quorum file
+    share.  Can also be re-run with -Force to re-register if needed.
 
     Follows the same proven flow as the ArtifactsStorage deploy.ps1:
       1. Discovers the witness storage account by tag in {base}-rg-identity

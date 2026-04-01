@@ -372,7 +372,7 @@ module vpnGateway 'modules/network/vpnGateway.bicep' = if (!empty(vpnRootCertDat
     gatewaySubnetId: vnet.outputs.snetGatewayId
     vpnClientAddressPrefix: vpnClientAddressPrefix
     rootCertData: vpnRootCertData
-    rootCertName: 'P2SRootCert'
+    rootCertName: 'P2SRootCert-${baseName}'
     tags: union(commonTags, { workload: 'vpn' })
   }
 }

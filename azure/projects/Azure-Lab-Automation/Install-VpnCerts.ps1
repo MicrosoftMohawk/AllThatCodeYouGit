@@ -55,8 +55,8 @@ if (-not $CertDir) {
     $CertDir = Join-Path $PSScriptRoot 'certs'
 }
 
-$RootCertPath  = Join-Path $CertDir 'P2SRootCert.cer'
-$ClientPfxPath = Join-Path $CertDir 'P2SClientCert.pfx'
+$RootCertPath  = Join-Path $CertDir "P2SRootCert-$BaseName.cer"
+$ClientPfxPath = Join-Path $CertDir "P2SClientCert-$BaseName.pfx"
 
 Write-Step "Validating certificate files..."
 

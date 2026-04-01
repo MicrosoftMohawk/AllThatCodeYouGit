@@ -962,8 +962,8 @@ if (-not $SkipDomainJoin) {
 # =============================================================================
 Write-Step "VPN Gateway P2S certificate setup..."
 $CertDir = Join-Path $ScriptRoot 'certs'
-$RootCertPath = Join-Path $CertDir 'P2SRootCert.cer'
-$ClientPfxPath = Join-Path $CertDir 'P2SClientCert.pfx'
+$RootCertPath = Join-Path $CertDir "P2SRootCert-$BaseName.cer"
+$ClientPfxPath = Join-Path $CertDir "P2SClientCert-$BaseName.pfx"
 
 # --- Step 1: Search the personal certificate store for existing certs --------
 $rootCertSubject  = "CN=P2SRootCert-$BaseName"

@@ -542,11 +542,13 @@ if ($EnableEntraKerberos) {
     $adScriptContent = $adScriptContent -replace '(?sm)param\s*\(.*?^\)\s*', ''
 
     # Prepend variable assignments with the actual values
+    $domainDNParts = ($DomainName -split '\.' | ForEach-Object { "DC=$_" }) -join ','
+    $ouPath = "OU=Storage Accounts,OU=Lab Servers,$domainDNParts"
     $preamble = @"
 `$StorageAccountName = '$($stgName -replace "'","''")'
 `$StorageKerbKey = '$($kerbKey -replace "'","''")'
 `$DomainName = '$($DomainName -replace "'","''")'
-`$OUPath = ''
+`$OUPath = '$($ouPath -replace "'","''")'
 
 "@
     $adScriptContent = $preamble + $adScriptContent
@@ -717,7 +719,7 @@ net use Z: /delete 2>&1 | Out-Null
 `$StorageAccountName = '$($stgName -replace "'","''")'
 `$StorageKerbKey = '$($kerbKey -replace "'","''")'
 `$DomainName = '$($DomainName -replace "'","''")'
-`$OUPath = ''
+`$OUPath = '$($ouPath -replace "'","''")'
 
 "@
                 $retryScriptContent = $retryPreamble + $retryScriptContent

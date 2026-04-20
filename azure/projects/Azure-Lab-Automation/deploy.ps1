@@ -8,7 +8,7 @@
     login session, and executes the Bicep deployment at the subscription scope.
 
     The deployment is tiered:
-      Tier 1: Core networking, AD Domain Controllers, Azure Bastion, Cloud Witness
+      Tier 1: Core networking, AD Domain Controllers, Azure Bastion, File Share Witness
       Tier 2: + SQL Server VMs (5 total, including AOAG pair at Site 2 with ILB)
       Tier 3: + Application VMs (CAS + 3 child primaries)
 
@@ -285,14 +285,24 @@ if ($DeploymentTier -ge 2) {
             Write-Ok "Key Vault found: $kvName"
 
             # --- Retrieve existing admin password from Key Vault ---------------
-            $ExistingAdminPassword = az keyvault secret show --vault-name $kvName --name vm-admin-password --query value -o tsv 2>&1
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($ExistingAdminPassword)) {
-                $ExistingAdminPassword = $ExistingAdminPassword.Trim()
+            $kvResult = az keyvault secret show --vault-name $kvName --name vm-admin-password --query value -o tsv 2>&1
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($kvResult)) {
+                $ExistingAdminPassword = $kvResult.Trim()
                 Write-Ok "Existing admin password retrieved from Key Vault (will reuse)."
             } else {
-                Write-Host "   WARNING: Could not retrieve admin password from Key Vault." -ForegroundColor Yellow
-                Write-Host "   Key Vault has no public endpoint. Connect via VPN for incremental deploys." -ForegroundColor Yellow
-                Write-Host "   A new password will be generated. DC extensions may re-run." -ForegroundColor Yellow
+                $kvError = "$kvResult"
+                if ($kvError -match 'AADSTS|invalid_grant|InteractionRequired') {
+                    Write-Host "   WARNING: Key Vault access failed due to a stale authentication token." -ForegroundColor Yellow
+                    Write-Host "   Your Azure CLI session is valid for management operations but the" -ForegroundColor Yellow
+                    Write-Host "   Key Vault data-plane token has expired or been invalidated." -ForegroundColor Yellow
+                    Write-Host "   Run:  az account clear && az login" -ForegroundColor Cyan
+                    Write-Host "   Then re-run this script." -ForegroundColor Yellow
+                    exit 1
+                } else {
+                    Write-Host "   WARNING: Could not retrieve admin password from Key Vault." -ForegroundColor Yellow
+                    Write-Host "   Key Vault has no public endpoint. Connect via VPN for incremental deploys." -ForegroundColor Yellow
+                    Write-Host "   A new password will be generated. DC extensions may re-run." -ForegroundColor Yellow
+                }
                 $ExistingAdminPassword = ''
             }
         } else {
@@ -952,8 +962,8 @@ if (-not $SkipDomainJoin) {
 # =============================================================================
 Write-Step "VPN Gateway P2S certificate setup..."
 $CertDir = Join-Path $ScriptRoot 'certs'
-$RootCertPath = Join-Path $CertDir 'P2SRootCert.cer'
-$ClientPfxPath = Join-Path $CertDir 'P2SClientCert.pfx'
+$RootCertPath = Join-Path $CertDir "P2SRootCert-$BaseName.cer"
+$ClientPfxPath = Join-Path $CertDir "P2SClientCert-$BaseName.pfx"
 
 # --- Step 1: Search the personal certificate store for existing certs --------
 $rootCertSubject  = "CN=P2SRootCert-$BaseName"
@@ -1015,10 +1025,65 @@ $rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICA
 Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
 Write-Ok "Root cert exported: $RootCertPath"
 
-# Export client cert as PFX (TripleDES_SHA1 for cross-OS compatibility)
+# Export client cert as PFX (TripleDES_SHA1 for cross-OS compatibility).
+# If the existing cert's private key is non-exportable (created by an older
+# version of the script or imported without the exportable flag), delete it
+# and recreate with -KeyExportPolicy Exportable so re-export always works.
+# If the root cert also lacks a usable private key (imported from .cer or
+# corrupted), both certs are recreated from scratch.
 $pfxPwd = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
-Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
-    -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+try {
+    Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
+        -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+} catch {
+    if ($_.Exception.Message -match 'non-exportable|private key') {
+        Write-Host "   Existing client cert has a non-exportable private key. Recreating..." -ForegroundColor Yellow
+        $clientCert | Remove-Item -Force
+
+        # Check if the root cert has an accessible private key for signing.
+        # If not, recreate it too (the VPN Gateway validates the root public
+        # key which gets re-exported to .cer and passed as vpnRootCertData).
+        if (-not $rootCert.HasPrivateKey) {
+            Write-Host "   Root cert also lacks a private key. Recreating both certs..." -ForegroundColor Yellow
+            $rootCert | Remove-Item -Force
+            $rootCert = New-SelfSignedCertificate `
+                -Type Custom `
+                -Subject $rootCertSubject `
+                -KeySpec Signature `
+                -KeyExportPolicy Exportable `
+                -KeyLength 2048 `
+                -HashAlgorithm sha256 `
+                -KeyUsageProperty Sign `
+                -KeyUsage CertSign `
+                -CertStoreLocation 'Cert:\CurrentUser\My' `
+                -NotAfter (Get-Date).AddYears(3)
+            Write-Ok "Root CA recreated: $($rootCert.Subject) (Thumbprint: $($rootCert.Thumbprint))"
+
+            # Re-export root cert public key with the new cert
+            $rootDer = $rootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+            $rootCertBase64 = [Convert]::ToBase64String($rootDer)
+            $rootPem = "-----BEGIN CERTIFICATE-----`r`n$rootCertBase64`r`n-----END CERTIFICATE-----"
+            Set-Content -Path $RootCertPath -Value $rootPem -Encoding Ascii
+            Write-Ok "Root cert re-exported: $RootCertPath"
+        }
+
+        $clientCert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject $clientCertSubject `
+            -KeySpec Signature `
+            -KeyExportPolicy Exportable `
+            -KeyLength 2048 `
+            -HashAlgorithm sha256 `
+            -Signer $rootCert `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -NotAfter (Get-Date).AddYears(3)
+        Export-PfxCertificate -Cert $clientCert -FilePath $ClientPfxPath `
+            -Password $pfxPwd -CryptoAlgorithmOption TripleDES_SHA1 | Out-Null
+        Write-Ok "Client cert recreated with exportable key: $($clientCert.Subject) (Thumbprint: $($clientCert.Thumbprint))"
+    } else {
+        throw
+    }
+}
 Write-Ok "Client PFX exported: $ClientPfxPath (password = admin password in Key Vault)"
 
 # --- Step 3: Ensure root cert is in Trusted Root CAs ------------------------
@@ -1041,7 +1106,7 @@ $VpnRootCertData = $rootCertBase64
 # 4. Deploy
 # =============================================================================
 $tierDescription = switch ($DeploymentTier) {
-    1 { "Tier 1: Core Networking + AD (DCs, Bastion, Cloud Witness)" }
+    1 { "Tier 1: Core Networking + AD (DCs, Bastion, File Share Witness)" }
     2 { "Tier 2: + SQL Server VMs$(if($ColocateSqlBool){' (AOAG only — SQL colocated on MCM)'} else {' (5 VMs including AOAG at Site 2)'})" }
     3 { "Tier 3: Full Lab (Core + SQL + MCM servers)" }
 }
@@ -1060,6 +1125,71 @@ $vmNameParams = @(
 )
 $colocateParam = if ($ColocateSqlBool) { 'colocateSql=true' } else { 'colocateSql=false' }
 $joinDomainParam = if ($JoinDomainBool) { 'joinDomain=true' } else { 'joinDomain=false' }
+
+# --- Detect existing private DNS zones -----------------------------------------
+# If ArtifactsStorage (or another project) already created a privatelink DNS
+# zone linked to the lab VNet, pass its resource ID so the Bicep modules reuse
+# it instead of creating a conflicting duplicate (Azure blocks duplicate VNet
+# links to different zones of the same name).
+#
+# Detection logic:
+#   1. List all zones of the given name across the subscription
+#   2. For each zone, check if it has a VNet link to the lab VNet
+#   3. Use the first zone that has such a link
+#   4. If no linked zone exists, let the Bicep template create one
+# ---------------------------------------------------------------------------
+$labVnetName = "$BaseName-vnet"
+$labNetworkRg = "$BaseName-rg-network"
+$labVnetId = az network vnet show -g $labNetworkRg -n $labVnetName --query id -o tsv 2>&1
+if ($LASTEXITCODE -ne 0) { $labVnetId = '' } else { $labVnetId = $labVnetId.Trim() }
+
+function Find-LinkedPrivateDnsZone {
+    param([string]$ZoneName, [string]$VNetId)
+    if ([string]::IsNullOrWhiteSpace($VNetId)) { return '' }
+
+    # Get all zones with this name (returns resource ID + resource group)
+    $zonesJson = az network private-dns zone list `
+        --query "[?name=='$ZoneName'].{id:id, rg:resourceGroup}" -o json 2>&1
+    if ($LASTEXITCODE -ne 0) { return '' }
+    $zones = $null
+    try { $zones = $zonesJson | ConvertFrom-Json } catch { return '' }
+    if (-not $zones -or $zones.Count -eq 0) { return '' }
+
+    foreach ($zone in $zones) {
+        # Check if this zone has a VNet link pointing to the lab VNet
+        $linksJson = az network private-dns link vnet list `
+            --zone-name $ZoneName --resource-group $zone.rg `
+            --query "[?virtualNetwork.id=='$VNetId'].id" -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($linksJson)) {
+            return $zone.id.Trim()
+        }
+    }
+    return ''
+}
+
+# -- privatelink.file.core.windows.net (File Share Witness PE) --
+$existingFileDnsZoneId = ''
+Write-Step "Checking for existing privatelink.file.core.windows.net DNS zone linked to $labVnetName..."
+if (-not [string]::IsNullOrWhiteSpace($labVnetId)) {
+    $existingFileDnsZoneId = Find-LinkedPrivateDnsZone -ZoneName 'privatelink.file.core.windows.net' -VNetId $labVnetId
+}
+if (-not [string]::IsNullOrWhiteSpace($existingFileDnsZoneId)) {
+    Write-Ok "Found linked zone: $existingFileDnsZoneId"
+} else {
+    Write-Ok "No linked zone found — Bicep will create one"
+}
+
+# -- privatelink.vaultcore.azure.net (Key Vault PE) --
+$existingKvDnsZoneId = ''
+Write-Step "Checking for existing privatelink.vaultcore.azure.net DNS zone linked to $labVnetName..."
+if (-not [string]::IsNullOrWhiteSpace($labVnetId)) {
+    $existingKvDnsZoneId = Find-LinkedPrivateDnsZone -ZoneName 'privatelink.vaultcore.azure.net' -VNetId $labVnetId
+}
+if (-not [string]::IsNullOrWhiteSpace($existingKvDnsZoneId)) {
+    Write-Ok "Found linked zone: $existingKvDnsZoneId"
+} else {
+    Write-Ok "No linked zone found — Bicep will create one"
+}
 
 # Build the complete --parameters array (each key=value as a separate element
 # so PowerShell passes them as individual arguments to az CLI).
@@ -1080,6 +1210,8 @@ $deployParams = @(
     "domainStrategy=$DomainStrategy"
     "entraConnectPlacement=$EntraConnectPlacement"
     "osDiskSku=$OsDiskSku"
+    "existingFileDnsZoneId=$existingFileDnsZoneId"
+    "existingKvDnsZoneId=$existingKvDnsZoneId"
     $colocateParam
     $joinDomainParam
 ) + $vmNameParams
@@ -1097,6 +1229,8 @@ if ($EnableEntraBool) {
     Write-Host "  Entra Connect   : $EntraConnectPlacement" -ForegroundColor White
 }
 Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
+Write-Host "  DNS Zone (file) : $(if ($existingFileDnsZoneId) {"Reusing: $existingFileDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
+Write-Host "  DNS Zone (vault): $(if ($existingKvDnsZoneId) {"Reusing: $existingKvDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White
 Write-Host "  Admin Password  : $(if ($IsIncremental) {'(reused from Key Vault)'} else {'(auto-generated, stored in Key Vault)'})" -ForegroundColor White
 Write-Host "  Template        : $templateFile" -ForegroundColor White
@@ -1259,7 +1393,7 @@ Write-Header "Deployment Complete!"
 Write-Host ""
 Write-Host "  Resource Groups created:" -ForegroundColor White
 Write-Host "    - $BaseName-rg-network    (VNet, NSGs, Bastion, VPN Gateway)" -ForegroundColor Gray
-Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault, Cloud Witness)" -ForegroundColor Gray
+Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault, File Share Witness)" -ForegroundColor Gray
 if ($DeploymentTier -ge 2) {
     $mainContents = @()
     if (-not $ColocateSqlBool) { $mainContents += "$($VmNames.SqlCas)", "$($VmNames.SqlPrimA)" }
@@ -1379,7 +1513,9 @@ if ($DeploymentTier -ge 2) {
         Write-Host "  6) Install SQL Server on: $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB)" -ForegroundColor White
     }
     Write-Host "  7) Install SQL Server on AOAG nodes: $($VmNames.SqlAoag1), $($VmNames.SqlAoag2)" -ForegroundColor White
-    Write-Host "  8) Configure WSFC with Cloud Witness, create AOAG on Site 2 SQL nodes" -ForegroundColor White
+    Write-Host "  8) Register File Share Witness in AD (run separately after deployment):" -ForegroundColor White
+    Write-Host "       .\Register-WitnessStorage.ps1 -BaseName $BaseName" -ForegroundColor Cyan
+    Write-Host "     Then configure WSFC quorum + create AOAG on Site 2 SQL nodes" -ForegroundColor Gray
     Write-Host "  9) Create AG Listener using ILB IP 10.0.40.10 (probe port 59999)" -ForegroundColor White
 }
 if ($DeploymentTier -ge 3) {

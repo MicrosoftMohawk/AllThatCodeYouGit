@@ -105,14 +105,32 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
 }
 
 // ---------------------------------------------------------------------------
-// Data Disks (generated array)
+// Data Disks — standalone managed disks for idempotent redeployment.
+// ARM recognizes existing disks by name and treats the PUT as a no-op.
+// The VM references them with createOption 'Attach' which is stable across
+// redeployments (Azure rejects changing createOption on existing VMs).
 // ---------------------------------------------------------------------------
+resource dataDisksRes 'Microsoft.Compute/disks@2024-03-02' = [for i in range(0, dataDiskCount): {
+  name: '${vmName}-datadisk-${i}'
+  location: location
+  tags: tags
+  sku: {
+    name: dataDiskSku
+  }
+  properties: {
+    diskSizeGB: dataDiskSizeGb
+    creationData: {
+      createOption: 'Empty'
+    }
+  }
+}]
+
 var dataDisks = [for i in range(0, dataDiskCount): {
   name: '${vmName}-datadisk-${i}'
   lun: i
-  createOption: 'Empty'
-  diskSizeGB: dataDiskSizeGb
+  createOption: 'Attach'
   managedDisk: {
+    id: dataDisksRes[i].id
     storageAccountType: dataDiskSku
   }
   caching: (i == 0) ? 'ReadOnly' : 'None' // first disk (data) = ReadOnly, second (log) = None

@@ -136,8 +136,25 @@ param dc02Ip string = '10.0.1.5'
 @description('Static IP for Entra Connect server')
 param entraConnectIp string = '10.0.1.6'
 
+@description('Static IP for DC in Main site subnet')
+param dcMainIp string = '10.0.20.250'
+
+@description('Static IP for DC in Site 1 subnet')
+param dcSite1Ip string = '10.0.30.250'
+
+@description('Static IP for DC in Site 2 subnet')
+param dcSite2Ip string = '10.0.40.250'
+
 @description('AOAG Listener IP (ILB frontend) in Site 2 subnet')
 param aoagListenerIp string = '10.0.40.10'
+
+// --- Private DNS Zone Reuse --------------------------------------------------
+
+@description('Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone).')
+param existingFileDnsZoneId string = ''
+
+@description('Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the Key Vault PE skips DNS zone and VNet link creation to avoid conflicts.')
+param existingKvDnsZoneId string = ''
 
 // --- OS Image ----------------------------------------------------------------
 
@@ -189,6 +206,20 @@ param vmNamePrimB string = '${baseName}-prmb'
 @maxLength(15)
 param vmNamePrimC string = '${baseName}-prmc'
 
+// --- Site DC VM Names --------------------------------------------------------
+
+@description('VM name: Domain Controller for Main site')
+@maxLength(15)
+param vmNameDcMain string = '${baseName}-dc03'
+
+@description('VM name: Domain Controller for Site 1')
+@maxLength(15)
+param vmNameDcSite1 string = '${baseName}-dc04'
+
+@description('VM name: Domain Controller for Site 2')
+@maxLength(15)
+param vmNameDcSite2 string = '${baseName}-dc05'
+
 // --- OS Image ----------------------------------------------------------------
 
 @description('Windows Server image publisher')
@@ -233,6 +264,9 @@ var domainDN = join(map(domainParts, part => 'DC=${part}'), ',')
 // VM names — DCs are always baseName + suffix; MCM/SQL names come from parameters
 var dc01Name = '${baseName}-dc01'
 var dc02Name = '${baseName}-dc02'
+var dcMainName = vmNameDcMain
+var dcSite1Name = vmNameDcSite1
+var dcSite2Name = vmNameDcSite2
 
 // Effective MCM VM size — upsize when SQL is colocated
 var effectiveAppSize = colocateSql ? sizeAppColocated : sizeApp
@@ -338,7 +372,7 @@ module vpnGateway 'modules/network/vpnGateway.bicep' = if (!empty(vpnRootCertDat
     gatewaySubnetId: vnet.outputs.snetGatewayId
     vpnClientAddressPrefix: vpnClientAddressPrefix
     rootCertData: vpnRootCertData
-    rootCertName: 'P2SRootCert'
+    rootCertName: 'P2SRootCert-${baseName}'
     tags: union(commonTags, { workload: 'vpn' })
   }
 }
@@ -368,12 +402,15 @@ module keyVaultPe 'modules/security/keyVaultPrivateEndpoint.bicep' = {
     keyVaultName: keyVault.outputs.keyVaultName
     subnetId: vnet.outputs.snetPeId
     vnetId: vnet.outputs.vnetId
+    existingPrivateDnsZoneId: existingKvDnsZoneId
     location: location
     tags: union(commonTags, { workload: 'secrets' })
   }
 }
 
-// --- Cloud Witness Storage Account -------------------------------------------
+// --- File Share Witness Storage Account (WSFC Quorum) ------------------------
+// Deploys a locked-down Azure Files share for WSFC File Share Witness.
+// AD DS registration is a post-deployment step — see README Section 6.
 
 module cloudWitness 'modules/storage/storageAccount.bicep' = {
   name: 'deploy-cloud-witness'
@@ -382,7 +419,23 @@ module cloudWitness 'modules/storage/storageAccount.bicep' = {
     namePrefix: 'stgcw'
     location: location
     skuName: 'Standard_LRS'
-    tags: union(commonTags, { workload: 'cloud-witness' })
+    shareName: 'witness'
+    shareQuotaGiB: 5
+    tags: union(commonTags, { workload: 'file-share-witness' })
+  }
+}
+
+module cloudWitnessPe 'modules/storage/storagePrivateEndpoint.bicep' = {
+  name: 'deploy-cloud-witness-pe'
+  scope: rgNet
+  params: {
+    storageAccountId: cloudWitness.outputs.storageAccountId
+    storageAccountName: cloudWitness.outputs.storageAccountName
+    subnetId: vnet.outputs.snetPeId
+    vnetId: vnet.outputs.vnetId
+    existingPrivateDnsZoneId: existingFileDnsZoneId
+    location: location
+    tags: union(commonTags, { workload: 'file-share-witness' })
   }
 }
 
@@ -426,6 +479,65 @@ module dc02 'modules/compute/vm.bicep' = {
   }
 }
 
+// --- Site Domain Controller VMs (one per site for AD Sites & Services) -------
+
+module dcMain 'modules/compute/vm.bicep' = {
+  name: 'deploy-dc-main'
+  scope: rgMainSite
+  params: {
+    vmName: dcMainName
+    location: location
+    vmSize: sizeDC
+    subnetId: vnet.outputs.snetMainId
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: dcMainIp
+    osDiskSku: osDiskSku
+    tags: union(commonTags, { role: 'domain-controller', site: 'main' })
+  }
+}
+
+module dcSite1 'modules/compute/vm.bicep' = {
+  name: 'deploy-dc-site1'
+  scope: rgSite1Res
+  params: {
+    vmName: dcSite1Name
+    location: location
+    vmSize: sizeDC
+    subnetId: vnet.outputs.snetSite1Id
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: dcSite1Ip
+    osDiskSku: osDiskSku
+    tags: union(commonTags, { role: 'domain-controller', site: 'site1' })
+  }
+}
+
+module dcSite2 'modules/compute/vm.bicep' = {
+  name: 'deploy-dc-site2'
+  scope: rgSite2Res
+  params: {
+    vmName: dcSite2Name
+    location: location
+    vmSize: sizeDC
+    subnetId: vnet.outputs.snetSite2Id
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    imagePublisher: imagePublisher
+    imageOffer: imageOffer
+    imageSku: imageSku
+    privateIpAddress: dcSite2Ip
+    osDiskSku: osDiskSku
+    tags: union(commonTags, { role: 'domain-controller', site: 'site2' })
+  }
+}
+
 // --- Promote DC01 as first domain controller --------------------------------
 
 module promoteDc01 'modules/identity/promoteDC.bicep' = {
@@ -442,12 +554,62 @@ module promoteDc01 'modules/identity/promoteDC.bicep' = {
   }
 }
 
-// --- Configure AD: OUs, Groups, Service Accounts, gMSA ----------------------
+// --- Promote site DCs as replica domain controllers -------------------------
+
+module promoteDcMain 'modules/identity/replicaDC.bicep' = {
+  name: 'deploy-promote-dc-main'
+  scope: rgMainSite
+  dependsOn: [dcMain, promoteDc01]
+  params: {
+    vmName: dcMainName
+    location: location
+    domainName: domainName
+    primaryDcIp: dc01Ip
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    dsrmPassword: adminPassword
+    tags: union(commonTags, { role: 'domain-controller', site: 'main' })
+  }
+}
+
+module promoteDcSite1 'modules/identity/replicaDC.bicep' = {
+  name: 'deploy-promote-dc-site1'
+  scope: rgSite1Res
+  dependsOn: [dcSite1, promoteDc01]
+  params: {
+    vmName: dcSite1Name
+    location: location
+    domainName: domainName
+    primaryDcIp: dc01Ip
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    dsrmPassword: adminPassword
+    tags: union(commonTags, { role: 'domain-controller', site: 'site1' })
+  }
+}
+
+module promoteDcSite2 'modules/identity/replicaDC.bicep' = {
+  name: 'deploy-promote-dc-site2'
+  scope: rgSite2Res
+  dependsOn: [dcSite2, promoteDc01]
+  params: {
+    vmName: dcSite2Name
+    location: location
+    domainName: domainName
+    primaryDcIp: dc01Ip
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    dsrmPassword: adminPassword
+    tags: union(commonTags, { role: 'domain-controller', site: 'site2' })
+  }
+}
+
+// --- Configure AD: OUs, Groups, Service Accounts, gMSA, Sites & Services ----
 
 module configureAd 'modules/identity/configureAD.bicep' = {
   name: 'deploy-configure-ad'
   scope: rgId
-  dependsOn: [promoteDc01, promoteDc02]
+  dependsOn: [promoteDc01, promoteDc02, promoteDcMain, promoteDcSite1, promoteDcSite2]
   params: {
     vmName: dc01Name
     location: location
@@ -455,6 +617,14 @@ module configureAd 'modules/identity/configureAD.bicep' = {
     svcAccountPassword: adminPassword
     entraIdDomain: entraIdDomain
     domainStrategy: domainStrategy
+    baseName: baseName
+    snetAdPrefix: snetAdPrefix
+    snetMainPrefix: snetMainPrefix
+    snetSite1Prefix: snetSite1Prefix
+    snetSite2Prefix: snetSite2Prefix
+    dcMainName: dcMainName
+    dcSite1Name: dcSite1Name
+    dcSite2Name: dcSite2Name
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -929,6 +1099,7 @@ output resourceGroups object = {
 output vnetId string = vnet.outputs.vnetId
 output bastionName string = bastion.outputs.bastionName
 output cloudWitnessStorageAccount string = cloudWitness.outputs.storageAccountName
+output cloudWitnessFileShareName string = cloudWitness.outputs.fileShareName
 output keyVaultName string = keyVault.outputs.keyVaultName
 output keyVaultSecretName string = keyVault.outputs.secretName
 

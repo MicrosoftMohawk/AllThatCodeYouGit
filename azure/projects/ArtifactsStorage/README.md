@@ -15,7 +15,7 @@ and the Domain Controller for AD DS registration.
 | Azure Files Share | `artifacts` share (default 100 GiB quota) |
 | Private Endpoint | Connects storage to the lab VNet — no public access |
 | Private DNS Zone | `privatelink.file.core.windows.net` linked to lab VNet |
-| AD DS Identity Auth | On-prem AD Kerberos for SMB from domain-joined VMs |
+| AD DS Identity Auth | On-prem AD Kerberos for SMB from domain-joined VMs (computer account placed in `OU=Storage Accounts,OU=Lab Servers`) |
 | Entra ID Kerberos Auth | Alternative to AD DS — no computer account registration required |
 | Default Share Permission | `StorageFileDataSmbShareContributor` for all authenticated domain users |
 | RBAC | Optional Entra ID RBAC for deployer (az CLI / OAuth access) |

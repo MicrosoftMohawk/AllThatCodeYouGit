@@ -39,6 +39,7 @@ resource pip 'Microsoft.Network/publicIPAddresses@2023-11-01' = {
   sku: {
     name: 'Standard'
   }
+  zones: ['1', '2', '3']
   properties: {
     publicIPAllocationMethod: 'Static'
   }

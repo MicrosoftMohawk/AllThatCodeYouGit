@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "6546678967159314015"
+      "templateHash": "11456756773633521757"
     }
   },
   "parameters": {
@@ -1274,7 +1274,7 @@
             "value": "[parameters('vpnRootCertData')]"
           },
           "rootCertName": {
-            "value": "P2SRootCert"
+            "value": "[format('P2SRootCert-{0}', parameters('baseName'))]"
           },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('workload', 'vpn'))]"
@@ -1287,7 +1287,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "6995448948767322530"
+              "templateHash": "15427905034752392302"
             }
           },
           "parameters": {
@@ -1359,6 +1359,11 @@
               "sku": {
                 "name": "Standard"
               },
+              "zones": [
+                "1",
+                "2",
+                "3"
+              ],
               "properties": {
                 "publicIPAllocationMethod": "Static"
               }

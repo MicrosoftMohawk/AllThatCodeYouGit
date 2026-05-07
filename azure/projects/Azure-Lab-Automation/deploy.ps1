@@ -113,6 +113,9 @@ param(
 
     [string]$TimeZone,
 
+    [ValidateSet('2022', '2025')]
+    [string]$OsImage,
+
     [ValidateSet('Premium_LRS', 'StandardSSD_LRS', 'Standard_LRS')]
     [string]$OsDiskSku = 'Premium_LRS',
 
@@ -817,6 +820,35 @@ if (-not [string]::IsNullOrWhiteSpace($TimeZone)) {
 Write-Ok "VM Timezone: $VmTimeZone"
 
 # =============================================================================
+# 3ab. OS Image Selection
+# =============================================================================
+$imageSkuMap = [ordered]@{
+    '2022' = @{ Sku = '2022-datacenter-g2'; Display = 'Windows Server 2022 Datacenter (Gen2)' }
+    '2025' = @{ Sku = '2025-datacenter-g2'; Display = 'Windows Server 2025 Datacenter (Gen2)' }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($OsImage)) {
+    $SelectedImageSku = $imageSkuMap[$OsImage].Sku
+    Write-Ok "OS Image (from parameter): $($imageSkuMap[$OsImage].Display)"
+} else {
+    Write-Step "Select OS image for all VMs..."
+    Write-Host "   [1] $($imageSkuMap['2022'].Display)" -ForegroundColor White
+    Write-Host "   [2] $($imageSkuMap['2025'].Display)" -ForegroundColor White
+    $osChoice = Read-Host "`n   Enter choice (1-2, default: 1 — Server 2022)"
+    if ([string]::IsNullOrWhiteSpace($osChoice)) { $osChoice = '1' }
+
+    switch ($osChoice) {
+        '1' { $SelectedImageSku = $imageSkuMap['2022'].Sku }
+        '2' { $SelectedImageSku = $imageSkuMap['2025'].Sku }
+        default {
+            Write-Fail "Invalid choice. Defaulting to Windows Server 2022 Datacenter."
+            $SelectedImageSku = $imageSkuMap['2022'].Sku
+        }
+    }
+}
+Write-Ok "OS Image: $SelectedImageSku"
+
+# =============================================================================
 # 3a. Server Naming Convention + Colocated SQL Option
 # =============================================================================
 # Default VM names (max 15 chars for Windows computer name)
@@ -1209,6 +1241,7 @@ $deployParams = @(
     "entraIdDomain=$EntraIdDomain"
     "domainStrategy=$DomainStrategy"
     "entraConnectPlacement=$EntraConnectPlacement"
+    "imageSku=$SelectedImageSku"
     "osDiskSku=$OsDiskSku"
     "existingFileDnsZoneId=$existingFileDnsZoneId"
     "existingKvDnsZoneId=$existingKvDnsZoneId"
@@ -1229,6 +1262,7 @@ if ($EnableEntraBool) {
     Write-Host "  Entra Connect   : $EntraConnectPlacement" -ForegroundColor White
 }
 Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
+Write-Host "  OS Image        : $SelectedImageSku" -ForegroundColor White
 Write-Host "  DNS Zone (file) : $(if ($existingFileDnsZoneId) {"Reusing: $existingFileDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  DNS Zone (vault): $(if ($existingKvDnsZoneId) {"Reusing: $existingKvDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White

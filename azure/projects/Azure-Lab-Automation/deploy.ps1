@@ -1433,17 +1433,19 @@ if ($DeploymentTier -ge 3) {
 
 Write-Host ""
 Write-Host "  Next Steps:" -ForegroundColor Cyan
-Write-Host "  1) Retrieve admin password from Key Vault (requires VPN):" -ForegroundColor White
-Write-Host "     az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv" -ForegroundColor Gray
-Write-Host "     (Find your KV name: az keyvault list --resource-group $BaseName-rg-identity --query [].name -o tsv)" -ForegroundColor Gray
-Write-Host "     NOTE: Key Vault has no public endpoint. You must be on VPN to access secrets." -ForegroundColor Yellow
-Write-Host "  2) Connect via Bastion: Portal > $BaseName-bastion > Connect to VM" -ForegroundColor White
-Write-Host "  3) Connect via VPN:" -ForegroundColor White
+Write-Host "  1) Connect via VPN:" -ForegroundColor White
 Write-Host "     a) Download VPN client: Portal > $BaseName-vpngw > Point-to-site > Download VPN client" -ForegroundColor Gray
 Write-Host "     b) Client cert is already installed (CurrentUser\My)" -ForegroundColor Gray
 Write-Host "     c) Run the downloaded VPN client configuration" -ForegroundColor Gray
 Write-Host "     d) Connect using Windows VPN settings" -ForegroundColor Gray
+Write-Host "     e) Configure DNS for private endpoints (Admin PowerShell, one-time):" -ForegroundColor Gray
+Write-Host "        .\Set-VpnDnsConfig.ps1 -Action Install -BaseName $BaseName" -ForegroundColor Cyan
+Write-Host "        Required for Key Vault, Storage, and other private endpoint access over VPN." -ForegroundColor Gray
 Write-Host "     NOTE: VPN Gateway takes 25-45 min to provision. It may still be deploying." -ForegroundColor Yellow
+Write-Host "  2) Retrieve admin password from Key Vault (requires VPN + DNS config from step 1e):" -ForegroundColor White
+Write-Host "     az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv" -ForegroundColor Gray
+Write-Host "     (Find your KV name: az keyvault list --resource-group $BaseName-rg-identity --query [].name -o tsv)" -ForegroundColor Gray
+Write-Host "  3) Connect via Bastion: Portal > $BaseName-bastion > Connect to VM" -ForegroundColor White
 Write-Host "  4) AD Domain Services (automated):" -ForegroundColor White
 Write-Host "     - DC01 promoted as first DC in $DomainName" -ForegroundColor Gray
 Write-Host "     - DC02 promoted as replica DC" -ForegroundColor Gray

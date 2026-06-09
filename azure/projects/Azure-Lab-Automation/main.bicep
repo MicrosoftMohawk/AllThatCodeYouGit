@@ -226,8 +226,12 @@ param imagePublisher string = 'MicrosoftWindowsServer'
 @description('Windows Server image offer')
 param imageOffer string = 'WindowsServer'
 
-@description('Windows Server image SKU')
-param imageSku string = '2022-datacenter-g2'
+@description('Windows Server image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2).')
+@allowed([
+  '2022-datacenter-g2'
+  '2025-datacenter-g2'
+])
+param imageSku string = '2025-datacenter-g2'
 
 // --- Tags --------------------------------------------------------------------
 

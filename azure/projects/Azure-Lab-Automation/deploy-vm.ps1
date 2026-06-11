@@ -249,15 +249,15 @@ if (-not [string]::IsNullOrWhiteSpace($OsImage)) {
     Write-Step "Select OS image..."
     Write-Host "   [1] $($imageSkuMap['2022'].Display)" -ForegroundColor White
     Write-Host "   [2] $($imageSkuMap['2025'].Display)" -ForegroundColor White
-    $osChoice = Read-Host "`n   Enter choice (1-2, default: 1)"
-    if ([string]::IsNullOrWhiteSpace($osChoice)) { $osChoice = '1' }
+    $osChoice = Read-Host "`n   Enter choice (1-2, default: 2)"
+    if ([string]::IsNullOrWhiteSpace($osChoice)) { $osChoice = '2' }
 
     switch ($osChoice) {
         '1' { $SelectedImageSku = $imageSkuMap['2022'].Sku }
         '2' { $SelectedImageSku = $imageSkuMap['2025'].Sku }
         default {
-            Write-Fail "Invalid choice. Defaulting to Windows Server 2022 Datacenter."
-            $SelectedImageSku = $imageSkuMap['2022'].Sku
+            Write-Fail "Invalid choice. Defaulting to Windows Server 2025 Datacenter."
+            $SelectedImageSku = $imageSkuMap['2025'].Sku
         }
     }
 }

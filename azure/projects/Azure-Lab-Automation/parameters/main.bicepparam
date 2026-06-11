@@ -78,6 +78,6 @@ param deploymentTier = 3
 
 // param imagePublisher = 'MicrosoftWindowsServer'
 // param imageOffer = 'WindowsServer'
-// param imageSku = '2022-datacenter-g2'
+// param imageSku = '2025-datacenter-g2'   // Allowed: '2025-datacenter-g2' (default), '2022-datacenter-g2'
 
 // param envTag = 'lab'

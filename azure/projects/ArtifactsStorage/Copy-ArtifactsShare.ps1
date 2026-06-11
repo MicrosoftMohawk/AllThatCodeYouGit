@@ -9,23 +9,29 @@
 
     Both accounts are deployed locked-down:
       - publicNetworkAccess = Disabled
-      - allowSharedKeyAccess = false
+      - allowSharedKeyAccess = false (enforced by Azure Policy
+        'StorageAccount_DisableLocalAuth_Modify', so SAS/shared-key auth is
+        impossible — the setting reverts to false on every write).
 
-    AzCopy cannot reach them over the private endpoint from an arbitrary
-    workstation, and it cannot mint a SAS without shared-key access.  This
-    script therefore:
+    AzCopy therefore authenticates with Microsoft Entra ID (OAuth) using the
+    current 'az login' credential, and only the public network access is
+    toggled.  This script:
 
       1. Discovers the source and target storage accounts (one each in
          '<prefix>-rg-artifacts').
-      2. Captures their current network + auth settings.
-      3. Temporarily enables public network access AND shared-key access
+      2. Captures their current network settings.
+      3. Temporarily enables public network access (defaultAction=Allow)
          on BOTH accounts.
-      4. Mints short-lived (1 hour) account SAS tokens
-         (read+list on source, read+write+create+list+delete on target).
-      5. Runs 'azcopy copy' share -> share with --recursive
-         (server-side, preserving SMB info + permissions where supported).
-      6. In a finally block, restores the original network + auth settings
-         on both accounts — even on failure or Ctrl-C.
+      4. Sets AZCOPY_AUTO_LOGIN_TYPE=AZCLI so AzCopy uses the signed-in
+         identity's data-plane RBAC (no SAS, no shared key).
+      5. Runs 'azcopy copy' share -> share with --from-to FileFile --recursive
+         (preserving SMB info).
+      6. In a finally block, restores the original network settings on both
+         accounts — even on failure or Ctrl-C.
+
+    The signed-in identity must hold a data-plane role on BOTH accounts, e.g.
+    'Storage File Data Privileged Contributor' (or Reader on source / Contributor
+    on target).
 
     The temporary exposure window is typically a few minutes.  All actions are
     audit-logged in the Activity Log on each storage account.
@@ -43,7 +49,8 @@
     (matches the Bicep template).
 
 .PARAMETER SasHours
-    Lifetime of the temporary SAS tokens in hours.  Default: 2.
+    Deprecated / unused.  Retained for backward compatibility; OAuth auth does
+    not use SAS tokens.
 
 .PARAMETER SubscriptionId
     Target subscription ID.  Defaults to the current az CLI subscription.
@@ -54,7 +61,7 @@
     and exits.
 
 .PARAMETER KeepUnlocked
-    Skip the final lockdown step (leave both accounts with public + shared-key
+    Skip the final lockdown step (leave both accounts with public network
     access enabled).  USE WITH CAUTION — intended only for debugging.
 
 .PARAMETER WhatIf
@@ -69,9 +76,11 @@
     .\Copy-ArtifactsShare.ps1 -SourceNamePrefix artifacts -TargetNamePrefix gisaart -WhatIf
 
 .NOTES
-    Requires: az CLI, azcopy.exe (https://aka.ms/downloadazcopy).
-    The signed-in user must have at least 'Contributor' on both artifacts RGs
-    in order to toggle network rules + list storage account keys.
+    Requires: az CLI (logged in), azcopy.exe (https://aka.ms/downloadazcopy).
+    The signed-in identity must have:
+      - 'Contributor' (control-plane) on both artifacts RGs to toggle network rules, and
+      - a data-plane file role on BOTH accounts, e.g.
+        'Storage File Data Privileged Contributor'.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -150,11 +159,25 @@ function Find-AzCopy {
 
     $candidates = @(
         "$env:ProgramFiles\AzCopy\azcopy.exe"
-        "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Microsoft.Azure.AZCopy.10_Microsoft.Winget.Source_8wekyb3d8bbwe\azcopy.exe"
         "$env:USERPROFILE\azcopy\azcopy.exe"
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { return $c }
+    }
+
+    # winget installs azcopy into a versioned subfolder under the package dir,
+    # e.g. ...\Microsoft.Azure.AZCopy.10_*\azcopy_windows_amd64_10.x.y\azcopy.exe
+    $searchRoots = @(
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
+        "$env:ProgramFiles"
+    )
+    foreach ($root in $searchRoots) {
+        if (Test-Path $root) {
+            $found = Get-ChildItem -Path $root -Filter azcopy.exe -Recurse -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+            if ($found) { return $found }
+        }
     }
     return $null
 }
@@ -214,26 +237,42 @@ function Restore-StorageAccount {
     }
 }
 
-function New-AccountSas {
+function Wait-OAuthReady {
+    # After enabling publicNetworkAccess, the network rule change can take a
+    # minute or two to propagate.  Poll a lightweight OAuth (Entra ID) call
+    # until it succeeds or we time out.  Uses --auth-mode login with backup
+    # intent (the Privileged data-plane role authorizes the backup intent that
+    # OAuth access to Azure Files requires).
     param(
         [string]$AccountName,
-        [string]$Permissions,
-        [int]$Hours
+        [string]$ShareName,
+        [int]$TimeoutSeconds = 300,
+        [int]$IntervalSeconds = 15
     )
-    $expiry = (Get-Date).ToUniversalTime().AddHours($Hours).ToString("yyyy-MM-ddTHH:mm:ssZ")
-    $sas = az storage account generate-sas `
-        --account-name $AccountName `
-        --services f `
-        --resource-types sco `
-        --permissions $Permissions `
-        --expiry $expiry `
-        --https-only `
-        --auth-mode key `
-        -o tsv 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to generate SAS for $AccountName : $sas"
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $attempt = 0
+    while ((Get-Date) -lt $deadline) {
+        $attempt++
+        $out = az storage file list `
+            --share-name $ShareName `
+            --account-name $AccountName `
+            --auth-mode login `
+            --backup-intent `
+            --num-results 1 `
+            -o none 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-OK "$AccountName reachable over OAuth (after $attempt attempt(s))"
+            return
+        }
+        # Network not yet open -> connection/timeout/403 from firewall.
+        # AuthorizationPermissionMismatch means RBAC isn't propagated/assigned.
+        if ("$out" -match 'AuthorizationPermissionMismatch|does not have permission') {
+            throw "OAuth readiness for $AccountName failed (RBAC): the signed-in identity lacks a data-plane role (e.g. 'Storage File Data Privileged Contributor') on this account.`n$out"
+        }
+        Write-Info "$AccountName not reachable yet; waiting ${IntervalSeconds}s..."
+        Start-Sleep -Seconds $IntervalSeconds
     }
-    return [string]$sas
+    throw "Timed out after ${TimeoutSeconds}s waiting for $AccountName to be reachable over OAuth."
 }
 
 # ============================================================================
@@ -320,17 +359,16 @@ if ($srcState.Name -eq $tgtState.Name) {
 Write-Header "Plan"
 Write-Host "  Source : $($srcState.Name) in $($srcState.Location) (rg: $srcRg)" -ForegroundColor White
 Write-Host "  Target : $($tgtState.Name) in $($tgtState.Location) (rg: $tgtRg)" -ForegroundColor White
-Write-Host "  Share  : $ShareName  (server-side AzCopy, --recursive, --preserve-smb-info)" -ForegroundColor White
-Write-Host "  SAS TTL: $SasHours hour(s)" -ForegroundColor White
+Write-Host "  Share  : $ShareName  (server-side AzCopy, Entra ID auth, --recursive, --preserve-smb-info)" -ForegroundColor White
 Write-Host ""
 Write-Host "  Steps:" -ForegroundColor White
-Write-Host "    1. Temporarily enable public+sharedKey on BOTH accounts" -ForegroundColor White
-Write-Host "    2. Mint short-lived account SAS for each" -ForegroundColor White
-Write-Host "    3. azcopy copy <src>/$ShareName <tgt>/$ShareName --recursive --preserve-smb-info" -ForegroundColor White
+Write-Host "    1. Temporarily enable public network access on BOTH accounts" -ForegroundColor White
+Write-Host "    2. Authenticate AzCopy via current 'az login' (Entra ID / OAuth)" -ForegroundColor White
+Write-Host "    3. azcopy copy <src>/$ShareName <tgt>/$ShareName --from-to FileFile --recursive --preserve-smb-info" -ForegroundColor White
 if ($KeepUnlocked) {
     Write-Host "    4. !! SKIPPING lockdown (-KeepUnlocked specified)" -ForegroundColor Red
 } else {
-    Write-Host "    4. Restore original network+auth settings on BOTH accounts (always, even on error)" -ForegroundColor White
+    Write-Host "    4. Restore original network settings on BOTH accounts (always, even on error)" -ForegroundColor White
 }
 
 if ($WhatIfPreference) {
@@ -354,50 +392,54 @@ $srcUnlocked = $false
 $tgtUnlocked = $false
 
 try {
-    Write-Step "Unlocking source: $($srcState.Name)"
+    Write-Step "Unlocking source network: $($srcState.Name)"
     Set-StorageAccountAccess `
         -ResourceGroup $srcRg -Name $srcState.Name `
         -PublicNetworkAccess 'Enabled' `
-        -AllowSharedKeyAccess 'true' `
+        -AllowSharedKeyAccess ([string]$srcState.AllowSharedKeyAccess).ToLower() `
         -DefaultAction 'Allow'
     $srcUnlocked = $true
-    Write-OK "Source unlocked (public + sharedKey)"
+    Write-OK "Source public network access enabled"
 
-    Write-Step "Unlocking target: $($tgtState.Name)"
+    Write-Step "Unlocking target network: $($tgtState.Name)"
     Set-StorageAccountAccess `
         -ResourceGroup $tgtRg -Name $tgtState.Name `
         -PublicNetworkAccess 'Enabled' `
-        -AllowSharedKeyAccess 'true' `
+        -AllowSharedKeyAccess ([string]$tgtState.AllowSharedKeyAccess).ToLower() `
         -DefaultAction 'Allow'
     $tgtUnlocked = $true
-    Write-OK "Target unlocked (public + sharedKey)"
+    Write-OK "Target public network access enabled"
 
-    Write-Step "Waiting for network rule propagation (15s)"
-    Start-Sleep -Seconds 15
-
-    Write-Step "Minting account SAS tokens (TTL: $SasHours h)"
-    # Source: read + list
-    $srcSas = New-AccountSas -AccountName $srcState.Name -Permissions 'rl' -Hours $SasHours
-    Write-OK "Source SAS generated ($(($srcSas).Length) chars)"
-    # Target: read + write + create + list + delete (delete needed for overwrite semantics)
-    $tgtSas = New-AccountSas -AccountName $tgtState.Name -Permissions 'rwcdl' -Hours $SasHours
-    Write-OK "Target SAS generated ($(($tgtSas).Length) chars)"
+    # Authenticate AzCopy via the current az CLI login (Entra ID / OAuth).
+    # These accounts enforce allowSharedKeyAccess=false (Azure Policy
+    # 'StorageAccount_DisableLocalAuth_Modify'), so SAS/shared-key auth is not
+    # possible.  OAuth uses the signed-in identity's data-plane RBAC instead.
+    # The signed-in user needs 'Storage File Data Privileged Contributor' (or
+    # Reader on source / Contributor on target) on both accounts.
+    Write-Step "Configuring AzCopy for Entra ID (OAuth) auth"
+    $env:AZCOPY_AUTO_LOGIN_TYPE = 'AZCLI'
+    Write-OK "AZCOPY_AUTO_LOGIN_TYPE=AZCLI (uses current 'az login' credential)"
 
     $srcUrl = "https://$($srcState.Name).file.core.windows.net/$ShareName"
     $tgtUrl = "https://$($tgtState.Name).file.core.windows.net/$ShareName"
-    $srcUrlSas = "$srcUrl`?$srcSas"
-    $tgtUrlSas = "$tgtUrl`?$tgtSas"
 
-    Write-Step "Running AzCopy"
-    Write-Info "azcopy copy `"$srcUrl?<SAS>`" `"$tgtUrl?<SAS>`" --recursive --preserve-smb-info"
+    Write-Step "Waiting for public network access to propagate"
+    Write-Info "This can take a minute or two after enabling public access."
+    Wait-OAuthReady -AccountName $srcState.Name -ShareName $ShareName
+    Wait-OAuthReady -AccountName $tgtState.Name -ShareName $ShareName
+
+    Write-Step "Running AzCopy (Entra ID auth)"
+    Write-Info "azcopy copy `"$srcUrl`" `"$tgtUrl`" --from-to FileFile --recursive --preserve-smb-info"
     Write-Host ""
 
-    # --preserve-smb-info: preserves last-write/creation timestamps & attrs
-    # --preserve-smb-permissions: requires both accounts to have AD/Entra
-    #   integration; we skip it here because the target may not be AD-registered yet.
-    #   Permissions will be re-applied on the new share when the lab mounts and
-    #   writes new files; for migrated files, ACLs default to share root inheritance.
-    & $azcopy copy $srcUrlSas $tgtUrlSas `
+    # --from-to FileFile: required so AzCopy treats both endpoints as Azure Files
+    #   over OAuth (it adds the x-ms-file-request-intent: backup header that the
+    #   Privileged data roles authorize).
+    # --preserve-smb-info: preserves last-write/creation timestamps & attrs.
+    # --preserve-smb-permissions: skipped — requires both accounts AD-registered;
+    #   migrated files inherit the target share root ACLs.
+    & $azcopy copy $srcUrl $tgtUrl `
+        --from-to FileFile `
         --recursive `
         --preserve-smb-info=true `
         --overwrite=ifSourceNewer
@@ -410,11 +452,12 @@ try {
     Write-OK "AzCopy completed successfully"
 
 } finally {
+    $env:AZCOPY_AUTO_LOGIN_TYPE = $null
     Write-Step "Restoring original storage account state"
     if ($KeepUnlocked) {
         Write-Host "    !!  -KeepUnlocked specified — leaving accounts unlocked." -ForegroundColor Red
-        Write-Host "        Source: $($srcState.Name)  (public=Enabled, sharedKey=true)" -ForegroundColor Red
-        Write-Host "        Target: $($tgtState.Name)  (public=Enabled, sharedKey=true)" -ForegroundColor Red
+        Write-Host "        Source: $($srcState.Name)  (public=Enabled)" -ForegroundColor Red
+        Write-Host "        Target: $($tgtState.Name)  (public=Enabled)" -ForegroundColor Red
         Write-Host "        Re-lock manually when done." -ForegroundColor Red
     } else {
         if ($srcUnlocked) { Restore-StorageAccount -OriginalState $origSrc }

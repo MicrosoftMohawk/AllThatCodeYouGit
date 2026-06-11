@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "13694387965307234376"
+      "templateHash": "3051737672306393188"
     }
   },
   "parameters": {
@@ -32,6 +32,13 @@
       "type": "string",
       "metadata": {
         "description": "Subnet resource ID within the lab VNet for the Private Endpoint. Example: /subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/.../subnets/snet-pe"
+      }
+    },
+    "existingPrivateDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an existing privatelink.file DNS zone already linked to the lab VNet (e.g., created by the lab deployment). When provided, the Private Endpoint module reuses this zone instead of creating a duplicate, avoiding the \"virtual network cannot be linked to multiple zones with overlapping namespaces\" error. Leave empty to create a new zone."
       }
     },
     "deployerObjectId": {
@@ -389,6 +396,9 @@
           },
           "tags": {
             "value": "[variables('commonTags')]"
+          },
+          "existingPrivateDnsZoneId": {
+            "value": "[parameters('existingPrivateDnsZoneId')]"
           }
         },
         "template": {
@@ -398,7 +408,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "4476408876748287294"
+              "templateHash": "7088366747999947225"
             }
           },
           "parameters": {
@@ -444,13 +454,23 @@
               "metadata": {
                 "description": "Tags"
               }
+            },
+            "existingPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of an existing privatelink.file DNS zone already linked to the lab VNet. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone. This avoids the \"virtual network cannot be linked to multiple zones with overlapping namespaces\" error when the lab already created the zone."
+              }
             }
           },
           "variables": {
-            "privateDnsZoneName": "[format('privatelink.file.{0}', environment().suffixes.storage)]"
+            "privateDnsZoneName": "[format('privatelink.file.{0}', environment().suffixes.storage)]",
+            "createDnsZone": "[empty(parameters('existingPrivateDnsZoneId'))]",
+            "effectiveDnsZoneId": "[if(variables('createDnsZone'), resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName')), parameters('existingPrivateDnsZoneId'))]"
           },
           "resources": [
             {
+              "condition": "[variables('createDnsZone')]",
               "type": "Microsoft.Network/privateDnsZones",
               "apiVersion": "2024-06-01",
               "name": "[variables('privateDnsZoneName')]",
@@ -458,6 +478,7 @@
               "tags": "[parameters('tags')]"
             },
             {
+              "condition": "[variables('createDnsZone')]",
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', variables('privateDnsZoneName'), parameters('vnetLinkName'))]",
@@ -505,7 +526,7 @@
                   {
                     "name": "privatelink-file",
                     "properties": {
-                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+                      "privateDnsZoneId": "[variables('effectiveDnsZoneId')]"
                     }
                   }
                 ]
@@ -527,7 +548,7 @@
             },
             "dnsZoneId": {
               "type": "string",
-              "value": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+              "value": "[variables('effectiveDnsZoneId')]"
             }
           }
         }

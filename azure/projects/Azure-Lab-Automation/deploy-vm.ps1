@@ -90,7 +90,7 @@ param(
     [ValidateSet('2022', '2025')]
     [string]$OsImage,
 
-    [string]$VmSize = 'Standard_D2s_v5',
+    [string]$VmSize = 'Standard_B2as_v2',
 
     [string]$AdminPassword,
 
@@ -226,14 +226,60 @@ Write-Ok "Lab infrastructure found ($rgIdentity)"
 # --- Retrieve admin password from Key Vault if not provided -------------------
 if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
     Write-Step "Retrieving admin password from Key Vault..."
-    $kvName = az keyvault list --resource-group $rgIdentity --query "[0].name" -o tsv 2>&1
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($kvName)) {
-        Write-Fail "Could not find Key Vault in $rgIdentity. Provide -AdminPassword manually."
-        exit 1
+
+    # Find the vault name. Separate stdout/stderr so a warning on stderr
+    # doesn't end up in the variable we plan to use.
+    $kvErr = [System.IO.Path]::GetTempFileName()
+    try {
+        $kvName = (az keyvault list --resource-group $rgIdentity --query "[0].name" -o tsv 2>$kvErr) | Out-String
+        $kvName = $kvName.Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($kvName)) {
+            $errText = (Get-Content $kvErr -Raw -ErrorAction SilentlyContinue)
+            Write-Fail "Could not find Key Vault in $rgIdentity. Provide -AdminPassword manually."
+            if ($errText) { Write-Host "   CLI error: $errText" -ForegroundColor Gray }
+            exit 1
+        }
     }
-    $AdminPassword = az keyvault secret show --vault-name $kvName --name "vm-admin-password" --query "value" -o tsv 2>&1
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($AdminPassword)) {
-        Write-Fail "Could not retrieve password from Key Vault. Ensure VPN + DNS is configured, or provide -AdminPassword."
+    finally { Remove-Item $kvErr -Force -ErrorAction SilentlyContinue }
+
+    Write-Host "   Vault: $kvName" -ForegroundColor Gray
+
+    # Fetch the secret. Route stderr to a temp file so we can surface the real
+    # error message (403, DNS/network, secret-not-found, disabled, etc.)
+    # instead of a generic failure.
+    $secErr = [System.IO.Path]::GetTempFileName()
+    try {
+        $AdminPassword = (az keyvault secret show --vault-name $kvName --name "vm-admin-password" --query "value" -o tsv 2>$secErr) | Out-String
+        $AdminPassword = $AdminPassword.TrimEnd("`r", "`n")
+        $secExit = $LASTEXITCODE
+        $secErrText = (Get-Content $secErr -Raw -ErrorAction SilentlyContinue)
+    }
+    finally { Remove-Item $secErr -Force -ErrorAction SilentlyContinue }
+
+    if ($secExit -ne 0 -or [string]::IsNullOrWhiteSpace($AdminPassword)) {
+        Write-Fail "Could not retrieve secret 'vm-admin-password' from Key Vault '$kvName'."
+        if ($secErrText) {
+            Write-Host ""
+            Write-Host "   --- Azure CLI error ---" -ForegroundColor Yellow
+            Write-Host $secErrText.Trim() -ForegroundColor Gray
+            Write-Host "   -----------------------" -ForegroundColor Yellow
+        }
+        Write-Host ""
+        Write-Host "   Common causes:" -ForegroundColor Yellow
+        Write-Host "     * Missing RBAC role. You need 'Key Vault Secrets User' (or higher)" -ForegroundColor Gray
+        Write-Host "       on vault '$kvName' for principal:" -ForegroundColor Gray
+        $upn = az account show --query "user.name" -o tsv 2>$null
+        Write-Host "         $upn" -ForegroundColor Gray
+        Write-Host "       Grant with:" -ForegroundColor Gray
+        Write-Host "         az role assignment create --assignee $upn ``" -ForegroundColor DarkGray
+        Write-Host "           --role 'Key Vault Secrets User' ``" -ForegroundColor DarkGray
+        Write-Host "           --scope `$(az keyvault show -n $kvName --query id -o tsv)" -ForegroundColor DarkGray
+        Write-Host "     * KV firewall blocks your VPN client IP. Test data-plane reach:" -ForegroundColor Gray
+        Write-Host "         nslookup $kvName.vault.azure.net" -ForegroundColor DarkGray
+        Write-Host "         (should resolve to a private 10.x address)" -ForegroundColor DarkGray
+        Write-Host "     * Secret doesn't exist / was purged / soft-deleted. Verify:" -ForegroundColor Gray
+        Write-Host "         az keyvault secret list --vault-name $kvName -o table" -ForegroundColor DarkGray
+        Write-Host "     * Or pass the password explicitly: -AdminPassword '<value>'" -ForegroundColor Gray
         exit 1
     }
     Write-Ok "Admin password retrieved from Key Vault"
@@ -379,35 +425,85 @@ Write-Step "Deploying VM '$VmName'..."
 $templateFile = Join-Path $ScriptRoot 'modules' 'compute' 'vm.bicep'
 $deploymentName = "vm-$VmName-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
-$deployParams = @(
-    "vmName=$VmName"
-    "location=$Location"
-    "vmSize=$VmSize"
-    "subnetId=$subnetId"
-    "adminUsername=labadmin"
-    "adminPassword=$AdminPassword"
-    "imageSku=$SelectedImageSku"
-    "dataDiskCount=$DataDiskCount"
-)
-
-if (-not [string]::IsNullOrWhiteSpace($StaticIp)) {
-    $deployParams += "privateIpAddress=$StaticIp"
+# Build an ARM parameters file so we don't have to fight PowerShell/cmd quoting
+# rules for inline JSON values (e.g. the tags object) on the az CLI command line.
+$paramValues = [ordered]@{
+    vmName        = @{ value = $VmName }
+    location      = @{ value = $Location }
+    vmSize        = @{ value = $VmSize }
+    subnetId      = @{ value = $subnetId }
+    adminUsername = @{ value = 'labadmin' }
+    adminPassword = @{ value = $AdminPassword }
+    imageSku      = @{ value = $SelectedImageSku }
+    dataDiskCount = @{ value = $DataDiskCount }
+    tags          = @{ value = @{
+            project  = 'azure-lab'
+            env      = 'lab'
+            baseName = $BaseName
+        }
+    }
 }
 
-$tagsJson = "{`"project`":`"azure-lab`",`"env`":`"lab`",`"baseName`":`"$BaseName`"}"
-$deployParams += "tags=$tagsJson"
+if (-not [string]::IsNullOrWhiteSpace($StaticIp)) {
+    $paramValues['privateIpAddress'] = @{ value = $StaticIp }
+}
+
+$paramFileObj = [ordered]@{
+    '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
+    contentVersion = '1.0.0.0'
+    parameters     = $paramValues
+}
+
+$vmParamFile = Join-Path ([System.IO.Path]::GetTempPath()) "vm-$VmName-$([Guid]::NewGuid().ToString('N')).parameters.json"
+$paramFileObj | ConvertTo-Json -Depth 10 | Set-Content -Path $vmParamFile -Encoding UTF8
 
 Write-Host "   Resource Group : $vmRg" -ForegroundColor Gray
 Write-Host "   Template       : $templateFile" -ForegroundColor Gray
+Write-Host "   Parameters     : $vmParamFile" -ForegroundColor Gray
 
-az deployment group create `
-    --name $deploymentName `
-    --resource-group $vmRg `
-    --template-file $templateFile `
-    --parameters @deployParams `
-    --verbose
+# Precompile Bicep -> ARM JSON. This avoids a known `az deployment group create`
+# bug ("The content for this response was already consumed") that surfaces
+# during the CLI's internal Bicep compilation step.
+$compiledTemplate = Join-Path ([System.IO.Path]::GetTempPath()) "vm-$VmName-$([Guid]::NewGuid().ToString('N')).json"
+Write-Host "   Compiling Bicep to ARM JSON..." -ForegroundColor Gray
+az bicep build --file $templateFile --outfile $compiledTemplate 2>&1 | Out-Host
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $compiledTemplate)) {
+    Write-Fail "Bicep compilation failed."
+    exit 1
+}
 
-if ($LASTEXITCODE -ne 0) {
+$vmDeployExit = 1
+try {
+    az deployment group create `
+        --name $deploymentName `
+        --resource-group $vmRg `
+        --template-file $compiledTemplate `
+        --parameters "@$vmParamFile" `
+        --verbose
+    $vmDeployExit = $LASTEXITCODE
+}
+finally {
+    if ($vmDeployExit -eq 0) {
+        if (Test-Path $vmParamFile)     { Remove-Item $vmParamFile     -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $compiledTemplate) { Remove-Item $compiledTemplate -Force -ErrorAction SilentlyContinue }
+    }
+    else {
+        # Keep the temp files around so the user can inspect / re-run manually.
+        Write-Host ""
+        Write-Host "   Parameters file kept for troubleshooting:" -ForegroundColor Yellow
+        Write-Host "     $vmParamFile" -ForegroundColor Gray
+        Write-Host "   Compiled ARM template kept for troubleshooting:" -ForegroundColor Yellow
+        Write-Host "     $compiledTemplate" -ForegroundColor Gray
+        Write-Host "   You can re-run the deployment manually with:" -ForegroundColor Yellow
+        Write-Host "     az deployment group create ``" -ForegroundColor DarkGray
+        Write-Host "       --name $deploymentName ``" -ForegroundColor DarkGray
+        Write-Host "       --resource-group $vmRg ``" -ForegroundColor DarkGray
+        Write-Host "       --template-file `"$compiledTemplate`" ``" -ForegroundColor DarkGray
+        Write-Host "       --parameters `"@$vmParamFile`" --debug" -ForegroundColor DarkGray
+    }
+}
+
+if ($vmDeployExit -ne 0) {
     Write-Fail "VM deployment failed."
     exit 1
 }

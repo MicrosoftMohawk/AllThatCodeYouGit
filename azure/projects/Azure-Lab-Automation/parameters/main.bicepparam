@@ -67,10 +67,17 @@ param deploymentTier = 3
 
 // param dc01Ip = '10.0.1.4'
 // param dc02Ip = '10.0.1.5'
+// param dcMainIp = '10.0.20.250'
+// param dcSite1Ip = '10.0.30.250'
+// param dcSite2Ip = '10.0.40.250'
 // param aoagListenerIp = '10.0.40.10'
+
+// param vmNameDcMain = 'azlab-dc03'
+// param vmNameDcSite1 = 'azlab-dc04'
+// param vmNameDcSite2 = 'azlab-dc05'
 
 // param imagePublisher = 'MicrosoftWindowsServer'
 // param imageOffer = 'WindowsServer'
-// param imageSku = '2022-datacenter-g2'
+// param imageSku = '2025-datacenter-g2'   // Allowed: '2025-datacenter-g2' (default), '2022-datacenter-g2'
 
 // param envTag = 'lab'

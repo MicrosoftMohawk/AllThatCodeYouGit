@@ -273,6 +273,45 @@ if (-not [string]::IsNullOrWhiteSpace($LabVnetId) -and -not [string]::IsNullOrWh
 }
 
 # =============================================================================
+# 2a. Detect existing privatelink.file DNS zone linked to the lab VNet
+#
+# A VNet cannot be linked to two private DNS zones with overlapping namespaces.
+# If the lab already created 'privatelink.file.core.windows.net' and linked the
+# lab VNet to it, we must reuse that zone rather than create a duplicate.
+# =============================================================================
+Write-Step "Checking for an existing 'privatelink.file' DNS zone linked to the lab VNet..."
+
+$ExistingPrivateDnsZoneId = ''
+$dnsZoneName = 'privatelink.file.core.windows.net'
+
+# Find every privatelink.file zone in the subscription, then keep the one whose
+# VNet links reference the lab VNet.
+$candidateZones = az network private-dns zone list `
+    --query "[?name=='$dnsZoneName'].{id:id, rg:resourceGroup}" -o json 2>&1 | ConvertFrom-Json
+
+if ($candidateZones) {
+    foreach ($zone in $candidateZones) {
+        $links = az network private-dns link vnet list `
+            --resource-group $zone.rg `
+            --zone-name $dnsZoneName `
+            --query "[].virtualNetwork.id" -o tsv 2>&1
+        if ($LASTEXITCODE -eq 0 -and $links) {
+            $matched = $links -split "`n" | Where-Object { $_.Trim() -ieq $LabVnetId.Trim() }
+            if ($matched) {
+                $ExistingPrivateDnsZoneId = $zone.id
+                break
+            }
+        }
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ExistingPrivateDnsZoneId)) {
+    Write-Ok "Reusing existing DNS zone (lab VNet already linked): $ExistingPrivateDnsZoneId"
+} else {
+    Write-Ok "No existing linked zone found — a new private DNS zone will be created."
+}
+
+# =============================================================================
 # 3. RBAC — Deployer identity
 # =============================================================================
 $DeployerObjectId = ''
@@ -337,6 +376,7 @@ $deployParams = @(
     "deployerObjectId=$DeployerObjectId"
     "principalType=$PrincipalType"
     "shareQuotaGiB=$ShareQuotaGiB"
+    "existingPrivateDnsZoneId=$ExistingPrivateDnsZoneId"
 )
 
 Write-Header "Deployment Summary"
@@ -345,6 +385,7 @@ Write-Host "  Location        : $Location" -ForegroundColor White
 Write-Host "  Share Quota     : ${ShareQuotaGiB} GiB" -ForegroundColor White
 Write-Host "  Lab VNet        : $LabVnetId" -ForegroundColor White
 Write-Host "  PE Subnet       : $PeSubnetId" -ForegroundColor White
+Write-Host "  DNS Zone        : $(if ($ExistingPrivateDnsZoneId) { 'reuse existing (lab-linked)' } else { 'create new' })" -ForegroundColor White
 Write-Host "  RBAC Principal  : $(if ($DeployerObjectId) { $DeployerObjectId } else { '(none)' })" -ForegroundColor White
 Write-Host "  Template        : $templateFile" -ForegroundColor White
 
@@ -639,7 +680,7 @@ if ($EnableEntraKerberos) {
     Write-Ok "AD DS authentication enabled on storage account"
 
     # --- Restart KDC on DC02 to flush cached key material ---
-    # The Register script restarted DC01's KDC after ktpass set the AES key.
+    # The Register script restarted DC01's KDC after setting the AES256 key.
     # DC02 received the new key via replication but its KDC may still cache the
     # old AES key.  A KDC restart ensures all DCs issue valid service tickets.
     $dc02VmName = "$LabBaseName-dc02"
@@ -657,10 +698,11 @@ if ($EnableEntraKerberos) {
     }
 
     # --- Verify Kerberos SMB mount from a domain-joined VM ---
-    # The AES-256 key derived by the DC (based on the ktpass salt/UPN) must
-    # match the key Azure Files holds (kerb1).  A mismatch causes error 1396
-    # "The target account name is incorrect" at mount time.  This has bitten
-    # us multiple times, so we verify end-to-end before declaring success.
+    # The AES-256 key the DC derives (computer account, default host-based salt)
+    # must match the key Azure Files holds (kerb1).  A salt/key mismatch causes
+    # the mount to fail with "System error 86" / a credential prompt because
+    # Azure can't decrypt the Kerberos ticket.  We verify end-to-end before
+    # declaring success.
     $labRgMain = "$LabBaseName-rg-main"
     $testVm    = "$LabBaseName-cas"
 

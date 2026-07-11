@@ -36,6 +36,9 @@ param labVnetId string
 @description('Subnet resource ID within the lab VNet for the Private Endpoint. Example: /subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/.../subnets/snet-pe')
 param peSubnetId string
 
+@description('Resource ID of an existing privatelink.file DNS zone already linked to the lab VNet (e.g., created by the lab deployment). When provided, the Private Endpoint module reuses this zone instead of creating a duplicate, avoiding the "virtual network cannot be linked to multiple zones with overlapping namespaces" error. Leave empty to create a new zone.')
+param existingPrivateDnsZoneId string = ''
+
 @description('Azure AD object ID of the user or group to grant Storage File Data SMB Share Contributor')
 param deployerObjectId string = ''
 
@@ -140,6 +143,7 @@ module privateEndpoint 'modules/privateEndpoint.bicep' = {
     vnetLinkName: 'link-${labVnetName}'
     location: location
     tags: commonTags
+    existingPrivateDnsZoneId: existingPrivateDnsZoneId
   }
 }
 

@@ -226,19 +226,32 @@ function Show-SelectionMenu {
     }
 
     while ($true) {
-        $input = Read-Host "`nEnter selection (1-$($Items.Count))"
+        $selectionInput = Read-Host "`nEnter selection (1-$($Items.Count))"
         $index = 0
-        if ([int]::TryParse($input, [ref]$index) -and $index -ge 1 -and $index -le $Items.Count) {
+        if ([int]::TryParse($selectionInput, [ref]$index) -and $index -ge 1 -and $index -le $Items.Count) {
             return ($index - 1)
         }
         Write-Host "⚠ Invalid selection. Please enter a number between 1 and $($Items.Count)." -ForegroundColor Yellow
     }
 }
 
+# Function to normalize Azure CLI JSON output into an array
+function ConvertTo-Array {
+    param(
+        $InputObject
+    )
+
+    if ($null -eq $InputObject) {
+        return @()
+    }
+
+    return @($InputObject)
+}
+
 # Function to interactively select an Azure subscription
 function Select-Subscription {
     Write-Host "`nRetrieving available subscriptions..." -ForegroundColor Yellow
-    $subscriptions = az account list --query "[].{name:name, id:id, isDefault:isDefault}" -o json 2>$null | ConvertFrom-Json
+    $subscriptions = ConvertTo-Array (az account list --query "[].{name:name, id:id, isDefault:isDefault}" -o json 2>$null | ConvertFrom-Json)
 
     if (-not $subscriptions -or $subscriptions.Count -eq 0) {
         Write-Host "✗ No subscriptions found. Ensure you are logged in." -ForegroundColor Red
@@ -269,7 +282,7 @@ function Select-Subscription {
 # Function to interactively select a Bastion host (searches across all RGs in the subscription)
 function Select-BastionHost {
     Write-Host "`nRetrieving available Bastion hosts..." -ForegroundColor Yellow
-    $bastions = az network bastion list --query "[].{name:name, resourceGroup:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+    $bastions = ConvertTo-Array (az network bastion list --query "[].{name:name, resourceGroup:resourceGroup}" -o json 2>$null | ConvertFrom-Json)
 
     if (-not $bastions -or $bastions.Count -eq 0) {
         Write-Host "✗ No Bastion hosts found in the current subscription." -ForegroundColor Red
@@ -298,14 +311,14 @@ function Select-BastionHost {
 # Function to interactively select a resource group
 function Select-ResourceGroup {
     Write-Host "`nRetrieving available resource groups..." -ForegroundColor Yellow
-    $resourceGroups = az group list --query "[].name" -o json 2>$null | ConvertFrom-Json
+    $resourceGroups = ConvertTo-Array (az group list --query "[].name" -o json 2>$null | ConvertFrom-Json)
 
     if (-not $resourceGroups -or $resourceGroups.Count -eq 0) {
         Write-Host "✗ No resource groups found in the current subscription." -ForegroundColor Red
         return $null
     }
 
-    $sorted = $resourceGroups | Sort-Object
+    $sorted = @($resourceGroups | Sort-Object)
 
     $selectedIndex = Show-SelectionMenu -Title "Select VM Resource Group" -Items $sorted
     if ($null -eq $selectedIndex) { return $null }
@@ -323,10 +336,10 @@ function Select-VirtualMachine {
 
     if ($RGName) {
         Write-Host "`nRetrieving VMs in resource group: $RGName..." -ForegroundColor Yellow
-        $vms = az vm list --resource-group $RGName --query "[].name" -o json 2>$null | ConvertFrom-Json
+        $vms = ConvertTo-Array (az vm list --resource-group $RGName --query "[].name" -o json 2>$null | ConvertFrom-Json)
     } else {
         Write-Host "`nRetrieving VMs across the subscription..." -ForegroundColor Yellow
-        $vms = az vm list --query "[].{name:name, resourceGroup:resourceGroup}" -o json 2>$null | ConvertFrom-Json
+        $vms = ConvertTo-Array (az vm list --query "[].{name:name, resourceGroup:resourceGroup}" -o json 2>$null | ConvertFrom-Json)
     }
 
     if (-not $vms -or $vms.Count -eq 0) {
@@ -336,7 +349,7 @@ function Select-VirtualMachine {
     }
 
     if ($RGName) {
-        $sorted = $vms | Sort-Object
+        $sorted = @($vms | Sort-Object)
         $selectedIndex = Show-SelectionMenu -Title "Select Virtual Machine" -Items $sorted
         if ($null -eq $selectedIndex) { return $null }
 

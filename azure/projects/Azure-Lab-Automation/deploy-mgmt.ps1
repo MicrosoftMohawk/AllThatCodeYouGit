@@ -167,7 +167,16 @@ if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
     }
     $AdminPassword = az keyvault secret show --vault-name $kvName --name "vm-admin-password" --query "value" -o tsv 2>&1
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($AdminPassword)) {
-        Write-Fail "Could not retrieve password from Key Vault '$kvName'. Provide -AdminPassword manually."
+        $kvError = "$AdminPassword"
+        if ($kvError -match 'AADSTS|invalid_grant|InteractionRequired') {
+            Write-Fail "Key Vault access failed due to a stale authentication token."
+            Write-Host "   Your Azure CLI session is valid for management operations but the" -ForegroundColor Yellow
+            Write-Host "   Key Vault data-plane token has expired or been invalidated." -ForegroundColor Yellow
+            Write-Host "   Run:  az account clear && az login" -ForegroundColor Cyan
+            Write-Host "   Then re-run this script." -ForegroundColor Yellow
+        } else {
+            Write-Fail "Could not retrieve password from Key Vault '$kvName'. Provide -AdminPassword manually."
+        }
         exit 1
     }
     Write-Ok "Admin password retrieved from Key Vault '$kvName'"

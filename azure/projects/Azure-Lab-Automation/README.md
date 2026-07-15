@@ -233,6 +233,9 @@ cd "Azure Lab"
 # Set VM timezone to Eastern (skips interactive prompt)
 .\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -TimeZone "Eastern Standard Time"
 
+# Deploy with Windows Server 2025 Datacenter (default: 2022)
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -OsImage 2025
+
 # Supply domain name to skip interactive prompt / auto-detection
 .\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 2 -DomainName azlab.local
 
@@ -325,6 +328,7 @@ Azure-Lab/
 ├── README.md                              # This file
 ├── deploy.ps1                             # PowerShell wrapper (prereqs, incremental detection, naming, deploy)
 ├── deploy-mgmt.ps1                        # Standalone: deploy management VM (Entra ID joined)
+├── deploy-vm.ps1                          # Standalone: deploy a single VM into any lab subnet
 ├── Register-WitnessStorage.ps1            # Standalone: register witness storage account in AD
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
 ├── Set-VpnDnsConfig.ps1                   # Helper: configure DNS NRPT rules for VPN private endpoint access
@@ -384,6 +388,7 @@ Azure-Lab/
 | `-ColocateSql` | switch | `$false` | When set, SQL runs on MCM servers (no separate SQL VMs) |
 | `-SkipDomainJoin` | switch | `$false` | When set, SQL and MCM VMs are NOT domain-joined (deployed as workgroup servers) |
 | `-TimeZone` | string | (prompt) | Windows timezone for all VMs (e.g., `Eastern Standard Time`). If omitted, an interactive menu is shown. |
+| `-OsImage` | string | (prompt) | OS image version: `2022` or `2025`. If omitted, an interactive menu is shown. |
 | `-SubscriptionId` | string | (current) | Target Azure subscription ID |
 | `-WhatIf` | switch | `$false` | Preview deployment changes without applying |
 | `-Destroy` | switch | `$false` | Delete all lab resource groups |
@@ -442,7 +447,7 @@ Azure-Lab/
 | `aoagListenerIp` | string | `10.0.40.10` | AOAG Listener IP (ILB frontend) |
 | `imagePublisher` | string | `MicrosoftWindowsServer` | OS image publisher |
 | `imageOffer` | string | `WindowsServer` | OS image offer |
-| `imageSku` | string | `2022-datacenter-g2` | OS image SKU |
+| `imageSku` | string | `2022-datacenter-g2` | OS image SKU (`2022-datacenter-g2` or `2025-datacenter-g2`) |
 | `envTag` | string | `lab` | Environment tag value |
 | **Private DNS Zone Reuse** | | | |
 | `existingFileDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.file` DNS zone (auto-detected by `deploy.ps1`) |
@@ -455,6 +460,53 @@ Azure-Lab/
 | `vmNameMgmt` | string | `{base}-mgmt` | Management VM name (Entra ID joined) |
 | `vmNameEntraConnect` | string | `{base}-entr` | Entra Connect VM name (when placement = dedicated) |
 | `sizeManagement` | string | `Standard_D2s_v5` | VM size for Management VM and Entra Connect VM |
+
+---
+
+## Deploy a Single VM
+
+Use `deploy-vm.ps1` to deploy an individual VM into any existing lab subnet with optional domain join. This is useful for adding test servers, utility VMs, or workload-specific machines after the lab is deployed.
+
+```powershell
+# Interactive mode (prompts for OS image and subnet)
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-app01 -Location eastus
+
+# Deploy a Server 2025 VM into snet-main, domain-joined
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-test01 -Location eastus -Subnet main -OsImage 2025
+
+# Deploy a Server 2022 VM into Site 1, no domain join
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-wg01 -Location eastus -Subnet site1 -OsImage 2022 -SkipDomainJoin
+
+# Deploy with a static IP and data disks
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-sql01 -Location eastus -Subnet site2 -StaticIp 10.0.40.20 -DataDiskCount 2
+
+# Custom VM size
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-big01 -Location eastus -Subnet main -VmSize Standard_D4s_v5
+
+# Preview without deploying
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-test01 -Location eastus -WhatIf
+
+# Destroy a VM
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-test01 -Destroy
+```
+
+### deploy-vm.ps1 Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-BaseName` | string | (required) | Base name prefix from the main lab deployment |
+| `-VmName` | string | (required) | Name for the new VM (max 15 chars) |
+| `-Location` | string | (required) | Azure region (must match lab deployment) |
+| `-Subnet` | string | (prompt) | Target subnet: `ad`, `main`, `site1`, or `site2` |
+| `-OsImage` | string | (prompt) | OS version: `2022` or `2025`. If omitted, an interactive menu is shown. |
+| `-VmSize` | string | `Standard_D2s_v5` | VM size SKU |
+| `-AdminPassword` | string | (Key Vault) | VM admin password. If omitted, retrieved from Key Vault (requires VPN + DNS). |
+| `-SkipDomainJoin` | switch | `$false` | Deploy as workgroup server (no AD join) |
+| `-OuPath` | string | `OU=App Servers,...` | OU path for the computer object |
+| `-StaticIp` | string | (dynamic) | Static private IP address |
+| `-DataDiskCount` | int | `0` | Number of 128 GB data disks (0–4) |
+| `-WhatIf` | switch | `$false` | Preview changes without deploying |
+| `-Destroy` | switch | `$false` | Delete the VM and its resources |
 
 ---
 

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "5018372535387713628"
+    }
+  },
+  "parameters": {
+    "storageAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing artifacts storage account (e.g., artifactsstgujl67iqq77x6)"
+      }
+    },
+    "newLabBaseName": {
+      "type": "string",
+      "metadata": {
+        "description": "Base name of the newly deployed lab (used to suffix the new PE name and DNS VNet link)"
+      }
+    },
+    "newLabVnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the newly deployed lab VNet to link the private DNS zone to"
+      }
+    },
+    "newPeSubnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet resource ID inside the new lab VNet to host the new Private Endpoint (typically the snet-pe subnet)"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region for the Private Endpoint (DNS resources are global)"
+      }
+    },
+    "createDnsLink": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "When true, create a new VNet link on the artifacts private DNS zone for the new lab VNet. Set false when the new lab VNet is already linked to its own privatelink.file.<suffix> zone (Azure rejects overlapping namespace links)."
+      }
+    },
+    "targetDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional: resource ID of an existing privatelink.file.<suffix> zone to register the new PE in (typically the new lab's own file zone). When empty, the artifacts RG's zone is used."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to new resources"
+      }
+    }
+  },
+  "variables": {
+    "vnetIdSegments": "[split(parameters('newLabVnetId'), '/')]",
+    "newLabVnetName": "[variables('vnetIdSegments')[sub(length(variables('vnetIdSegments')), 1)]]",
+    "newPeName": "[format('{0}-pe-file-{1}', parameters('storageAccountName'), parameters('newLabBaseName'))]",
+    "newPlscName": "[format('{0}-plsc-file-{1}', parameters('storageAccountName'), parameters('newLabBaseName'))]",
+    "newDnsLinkName": "[format('link-{0}', variables('newLabVnetName'))]",
+    "privateDnsZoneName": "[format('privatelink.file.{0}', environment().suffixes.storage)]",
+    "effectiveDnsZoneId": "[if(empty(parameters('targetDnsZoneId')), resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName')), parameters('targetDnsZoneId'))]"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('createDnsLink')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', variables('privateDnsZoneName'), variables('newDnsLinkName'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('newLabVnetId')]"
+        },
+        "registrationEnabled": false
+      }
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('newPeName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('newPeSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[variables('newPlscName')]",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "groupIds": [
+                "file"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('newPeName'), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "privatelink-file",
+            "properties": {
+              "privateDnsZoneId": "[variables('effectiveDnsZoneId')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', variables('newPeName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "newPrivateEndpointId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/privateEndpoints', variables('newPeName'))]"
+    },
+    "newPrivateEndpointName": {
+      "type": "string",
+      "value": "[variables('newPeName')]"
+    },
+    "newPrivateEndpointIp": {
+      "type": "string",
+      "value": "[if(and(greater(length(reference(resourceId('Microsoft.Network/privateEndpoints', variables('newPeName')), '2023-11-01').customDnsConfigs), 0), greater(length(reference(resourceId('Microsoft.Network/privateEndpoints', variables('newPeName')), '2023-11-01').customDnsConfigs[0].ipAddresses), 0)), reference(resourceId('Microsoft.Network/privateEndpoints', variables('newPeName')), '2023-11-01').customDnsConfigs[0].ipAddresses[0], 'pending')]"
+    },
+    "newDnsVnetLinkName": {
+      "type": "string",
+      "value": "[if(parameters('createDnsLink'), variables('newDnsLinkName'), '')]"
+    },
+    "effectiveDnsZoneId": {
+      "type": "string",
+      "value": "[variables('effectiveDnsZoneId')]"
+    }
+  }
+}

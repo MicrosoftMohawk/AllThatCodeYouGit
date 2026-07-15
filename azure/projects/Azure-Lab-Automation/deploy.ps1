@@ -113,6 +113,9 @@ param(
 
     [string]$TimeZone,
 
+    [ValidateSet('2022', '2025')]
+    [string]$OsImage,
+
     [ValidateSet('Premium_LRS', 'StandardSSD_LRS', 'Standard_LRS')]
     [string]$OsDiskSku = 'Premium_LRS',
 
@@ -817,6 +820,35 @@ if (-not [string]::IsNullOrWhiteSpace($TimeZone)) {
 Write-Ok "VM Timezone: $VmTimeZone"
 
 # =============================================================================
+# 3ab. OS Image Selection
+# =============================================================================
+$imageSkuMap = [ordered]@{
+    '2022' = @{ Sku = '2022-datacenter-g2'; Display = 'Windows Server 2022 Datacenter (Gen2)' }
+    '2025' = @{ Sku = '2025-datacenter-g2'; Display = 'Windows Server 2025 Datacenter (Gen2)' }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($OsImage)) {
+    $SelectedImageSku = $imageSkuMap[$OsImage].Sku
+    Write-Ok "OS Image (from parameter): $($imageSkuMap[$OsImage].Display)"
+} else {
+    Write-Step "Select OS image for all VMs..."
+    Write-Host "   [1] $($imageSkuMap['2022'].Display)" -ForegroundColor White
+    Write-Host "   [2] $($imageSkuMap['2025'].Display)" -ForegroundColor White
+    $osChoice = Read-Host "`n   Enter choice (1-2, default: 2 — Server 2025)"
+    if ([string]::IsNullOrWhiteSpace($osChoice)) { $osChoice = '2' }
+
+    switch ($osChoice) {
+        '1' { $SelectedImageSku = $imageSkuMap['2022'].Sku }
+        '2' { $SelectedImageSku = $imageSkuMap['2025'].Sku }
+        default {
+            Write-Fail "Invalid choice. Defaulting to Windows Server 2025 Datacenter."
+            $SelectedImageSku = $imageSkuMap['2025'].Sku
+        }
+    }
+}
+Write-Ok "OS Image: $SelectedImageSku"
+
+# =============================================================================
 # 3a. Server Naming Convention + Colocated SQL Option
 # =============================================================================
 # Default VM names (max 15 chars for Windows computer name)
@@ -1209,6 +1241,7 @@ $deployParams = @(
     "entraIdDomain=$EntraIdDomain"
     "domainStrategy=$DomainStrategy"
     "entraConnectPlacement=$EntraConnectPlacement"
+    "imageSku=$SelectedImageSku"
     "osDiskSku=$OsDiskSku"
     "existingFileDnsZoneId=$existingFileDnsZoneId"
     "existingKvDnsZoneId=$existingKvDnsZoneId"
@@ -1229,6 +1262,7 @@ if ($EnableEntraBool) {
     Write-Host "  Entra Connect   : $EntraConnectPlacement" -ForegroundColor White
 }
 Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
+Write-Host "  OS Image        : $SelectedImageSku" -ForegroundColor White
 Write-Host "  DNS Zone (file) : $(if ($existingFileDnsZoneId) {"Reusing: $existingFileDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  DNS Zone (vault): $(if ($existingKvDnsZoneId) {"Reusing: $existingKvDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White
@@ -1433,17 +1467,19 @@ if ($DeploymentTier -ge 3) {
 
 Write-Host ""
 Write-Host "  Next Steps:" -ForegroundColor Cyan
-Write-Host "  1) Retrieve admin password from Key Vault (requires VPN):" -ForegroundColor White
-Write-Host "     az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv" -ForegroundColor Gray
-Write-Host "     (Find your KV name: az keyvault list --resource-group $BaseName-rg-identity --query [].name -o tsv)" -ForegroundColor Gray
-Write-Host "     NOTE: Key Vault has no public endpoint. You must be on VPN to access secrets." -ForegroundColor Yellow
-Write-Host "  2) Connect via Bastion: Portal > $BaseName-bastion > Connect to VM" -ForegroundColor White
-Write-Host "  3) Connect via VPN:" -ForegroundColor White
+Write-Host "  1) Connect via VPN:" -ForegroundColor White
 Write-Host "     a) Download VPN client: Portal > $BaseName-vpngw > Point-to-site > Download VPN client" -ForegroundColor Gray
 Write-Host "     b) Client cert is already installed (CurrentUser\My)" -ForegroundColor Gray
 Write-Host "     c) Run the downloaded VPN client configuration" -ForegroundColor Gray
 Write-Host "     d) Connect using Windows VPN settings" -ForegroundColor Gray
+Write-Host "     e) Configure DNS for private endpoints (Admin PowerShell, one-time):" -ForegroundColor Gray
+Write-Host "        .\Set-VpnDnsConfig.ps1 -Action Install -BaseName $BaseName" -ForegroundColor Cyan
+Write-Host "        Required for Key Vault, Storage, and other private endpoint access over VPN." -ForegroundColor Gray
 Write-Host "     NOTE: VPN Gateway takes 25-45 min to provision. It may still be deploying." -ForegroundColor Yellow
+Write-Host "  2) Retrieve admin password from Key Vault (requires VPN + DNS config from step 1e):" -ForegroundColor White
+Write-Host "     az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv" -ForegroundColor Gray
+Write-Host "     (Find your KV name: az keyvault list --resource-group $BaseName-rg-identity --query [].name -o tsv)" -ForegroundColor Gray
+Write-Host "  3) Connect via Bastion: Portal > $BaseName-bastion > Connect to VM" -ForegroundColor White
 Write-Host "  4) AD Domain Services (automated):" -ForegroundColor White
 Write-Host "     - DC01 promoted as first DC in $DomainName" -ForegroundColor Gray
 Write-Host "     - DC02 promoted as replica DC" -ForegroundColor Gray

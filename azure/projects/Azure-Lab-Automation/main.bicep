@@ -458,6 +458,7 @@ module dc01 'modules/compute/vm.bicep' = {
     imageSku: imageSku
     privateIpAddress: dc01Ip
     osDiskSku: osDiskSku
+    dnsServers: [dc01Ip, dc02Ip]
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -477,6 +478,7 @@ module dc02 'modules/compute/vm.bicep' = {
     imageSku: imageSku
     privateIpAddress: dc02Ip
     osDiskSku: osDiskSku
+    dnsServers: [dc02Ip, dc01Ip]
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -498,6 +500,7 @@ module dcMain 'modules/compute/vm.bicep' = {
     imageSku: imageSku
     privateIpAddress: dcMainIp
     osDiskSku: osDiskSku
+    dnsServers: [dcMainIp, dc01Ip]
     tags: union(commonTags, { role: 'domain-controller', site: 'main' })
   }
 }
@@ -517,6 +520,7 @@ module dcSite1 'modules/compute/vm.bicep' = {
     imageSku: imageSku
     privateIpAddress: dcSite1Ip
     osDiskSku: osDiskSku
+    dnsServers: [dcSite1Ip, dc01Ip]
     tags: union(commonTags, { role: 'domain-controller', site: 'site1' })
   }
 }
@@ -536,6 +540,7 @@ module dcSite2 'modules/compute/vm.bicep' = {
     imageSku: imageSku
     privateIpAddress: dcSite2Ip
     osDiskSku: osDiskSku
+    dnsServers: [dcSite2Ip, dc01Ip]
     tags: union(commonTags, { role: 'domain-controller', site: 'site2' })
   }
 }
@@ -552,6 +557,8 @@ module promoteDc01 'modules/identity/promoteDC.bicep' = {
     domainName: domainName
     netbiosName: netbiosName
     dsrmPassword: adminPassword
+    selfIp: dc01Ip
+    secondaryDcIp: dc02Ip
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -570,6 +577,7 @@ module promoteDcMain 'modules/identity/replicaDC.bicep' = {
     adminUsername: adminUsername
     adminPassword: adminPassword
     dsrmPassword: adminPassword
+    selfIp: dcMainIp
     tags: union(commonTags, { role: 'domain-controller', site: 'main' })
   }
 }
@@ -586,6 +594,7 @@ module promoteDcSite1 'modules/identity/replicaDC.bicep' = {
     adminUsername: adminUsername
     adminPassword: adminPassword
     dsrmPassword: adminPassword
+    selfIp: dcSite1Ip
     tags: union(commonTags, { role: 'domain-controller', site: 'site1' })
   }
 }
@@ -602,6 +611,7 @@ module promoteDcSite2 'modules/identity/replicaDC.bicep' = {
     adminUsername: adminUsername
     adminPassword: adminPassword
     dsrmPassword: adminPassword
+    selfIp: dcSite2Ip
     tags: union(commonTags, { role: 'domain-controller', site: 'site2' })
   }
 }
@@ -648,6 +658,7 @@ module entraConnectVm 'modules/compute/vm.bicep' = if (deployEntraConnectVm) {
     imageSku: imageSku
     privateIpAddress: entraConnectIp
     osDiskSku: osDiskSku
+    dnsServers: [dc01Ip, dc02Ip]
     tags: union(commonTags, { role: 'entra-connect' })
   }
 }
@@ -666,6 +677,7 @@ module promoteDc02 'modules/identity/replicaDC.bicep' = {
     adminUsername: adminUsername
     adminPassword: adminPassword
     dsrmPassword: adminPassword
+    selfIp: dc02Ip
     tags: union(commonTags, { role: 'domain-controller' })
   }
 }
@@ -753,6 +765,7 @@ module sqlCas 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateS
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
     osDiskSku: osDiskSku
+    dnsServers: [dcMainIp, dc01Ip]
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -776,6 +789,7 @@ module sqlPrima 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
     osDiskSku: osDiskSku
+    dnsServers: [dcMainIp, dc01Ip]
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -799,6 +813,7 @@ module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
     osDiskSku: osDiskSku
+    dnsServers: [dcSite1Ip, dc01Ip]
     tags: union(commonTags, { role: 'sql-server', site: 'site1' })
   }
 }
@@ -824,6 +839,7 @@ module sqlPrimc01 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
     availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
     loadBalancerBackendPoolId: ilb.outputs.backendPoolId
     osDiskSku: osDiskSku
+    dnsServers: [dcSite2Ip, dc01Ip]
     tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '1' })
   }
 }
@@ -849,6 +865,7 @@ module sqlPrimc02 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
     availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
     loadBalancerBackendPoolId: ilb.outputs.backendPoolId
     osDiskSku: osDiskSku
+    dnsServers: [dcSite2Ip, dc01Ip]
     tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '2' })
   }
 }
@@ -954,6 +971,7 @@ module casVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
+    dnsServers: [dcMainIp, dc01Ip]
     tags: union(commonTags, { role: colocateSql ? 'cas-sql' : 'cas', site: 'main' })
   }
 }
@@ -977,6 +995,7 @@ module primaVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
+    dnsServers: [dcMainIp, dc01Ip]
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'main' })
   }
 }
@@ -1000,6 +1019,7 @@ module primbVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
+    dnsServers: [dcSite1Ip, dc01Ip]
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'site1' })
   }
 }
@@ -1020,6 +1040,7 @@ module primcVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     imageOffer: imageOffer
     imageSku: imageSku
     osDiskSku: osDiskSku
+    dnsServers: [dcSite2Ip, dc01Ip]
     tags: union(commonTags, { role: 'child-primary', site: 'site2' })
   }
 }

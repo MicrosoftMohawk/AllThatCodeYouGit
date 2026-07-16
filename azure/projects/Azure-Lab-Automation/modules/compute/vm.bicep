@@ -76,6 +76,9 @@ param loadBalancerBackendPoolId string = ''
 @description('Tags to apply to all resources')
 param tags object = {}
 
+@description('DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery.')
+param dnsServers array = []
+
 // ---------------------------------------------------------------------------
 // NIC
 // ---------------------------------------------------------------------------
@@ -105,6 +108,12 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
         }
       }
     ]
+    // NIC-level DNS override. An empty array inherits VNet DNS; non-empty overrides it.
+    // Each DC passes [selfIp, fallbackDcIp] so the DC is its own primary resolver.
+    // Member VMs pass [localSiteDcIp, dc01Ip] for site-local DNS resolution.
+    dnsSettings: {
+      dnsServers: dnsServers
+    }
   }
 }
 

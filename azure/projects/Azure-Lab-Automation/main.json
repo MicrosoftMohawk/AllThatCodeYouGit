@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "11456756773633521757"
+      "templateHash": "16203087579531488320"
     }
   },
   "parameters": {
@@ -421,9 +421,13 @@
     },
     "imageSku": {
       "type": "string",
-      "defaultValue": "2022-datacenter-g2",
+      "defaultValue": "2025-datacenter-g2",
+      "allowedValues": [
+        "2022-datacenter-g2",
+        "2025-datacenter-g2"
+      ],
       "metadata": {
-        "description": "Windows Server image SKU"
+        "description": "Windows Server image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
       }
     },
     "envTag": {
@@ -2248,6 +2252,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dc01Ip')]",
+              "[parameters('dc02Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller'))]"
           }
@@ -2259,7 +2269,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -2316,9 +2326,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -2395,6 +2409,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -2438,7 +2459,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -2587,6 +2611,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dc02Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller'))]"
           }
@@ -2598,7 +2628,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -2655,9 +2685,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -2734,6 +2768,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -2777,7 +2818,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -2926,6 +2970,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcMainIp')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller', 'site', 'main'))]"
           }
@@ -2937,7 +2987,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -2994,9 +3044,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -3073,6 +3127,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -3116,7 +3177,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -3265,6 +3329,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcSite1Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller', 'site', 'site1'))]"
           }
@@ -3276,7 +3346,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -3333,9 +3403,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -3412,6 +3486,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -3455,7 +3536,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -3604,6 +3688,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcSite2Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller', 'site', 'site2'))]"
           }
@@ -3615,7 +3705,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -3672,9 +3762,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -3751,6 +3845,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -3794,7 +3895,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -3925,6 +4029,12 @@
           "dsrmPassword": {
             "value": "[parameters('adminPassword')]"
           },
+          "selfIp": {
+            "value": "[parameters('dc01Ip')]"
+          },
+          "secondaryDcIp": {
+            "value": "[parameters('dc02Ip')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller'))]"
           }
@@ -3936,7 +4046,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "476956455133675823"
+              "templateHash": "3570988769795783331"
             }
           },
           "parameters": {
@@ -3976,10 +4086,24 @@
               "metadata": {
                 "description": "Tags"
               }
+            },
+            "selfIp": {
+              "type": "string",
+              "metadata": {
+                "description": "Static IP of this domain controller. After forest promotion the NIC DNS client is reset to this IP as primary so the DC uses itself for DNS resolution — required for reliable AD replication, SYSVOL, and GPO delivery."
+              }
+            },
+            "secondaryDcIp": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "IP of a secondary DNS server (e.g., DC02). Used as fallback when the primary (self) is unreachable. Leave empty to configure only the self IP."
+              }
             }
           },
           "variables": {
-            "q": "'"
+            "q": "'",
+            "secondaryDnsPart": "[if(empty(parameters('secondaryDcIp')), '', format(', {0}{1}{2}', variables('q'), parameters('secondaryDcIp'), variables('q')))]"
           },
           "resources": [
             {
@@ -3997,6 +4121,23 @@
                   "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\PromoteDC1.log -Append; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools -IncludeAllSubFeature; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {0}Already a domain controller -- skipping forest promotion{1} }} else {{ $pw = ConvertTo-SecureString {2}{3}{4} -AsPlainText -Force; Install-ADDSForest -DomainName {5}{6}{7} -DomainNetbiosName {8}{9}{10} -SafeModeAdministratorPassword $pw -InstallDns:$true -CreateDnsDelegation:$false -DatabasePath {11}C:\\Windows\\NTDS{12} -LogPath {13}C:\\Windows\\NTDS{14} -SysvolPath {15}C:\\Windows\\SYSVOL{16} -NoRebootOnCompletion:$false -Force:$true }}; Stop-Transcript\"', variables('q'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), parameters('netbiosName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/ResetDnsPostPromotion', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 120,
+                "source": {
+                  "script": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}{3}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('secondaryDnsPart'))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/PromoteFirstDC', parameters('vmName')), '/')[0], split(format('{0}/PromoteFirstDC', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4044,6 +4185,9 @@
           "dsrmPassword": {
             "value": "[parameters('adminPassword')]"
           },
+          "selfIp": {
+            "value": "[parameters('dcMainIp')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller', 'site', 'main'))]"
           }
@@ -4055,7 +4199,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "7638458125040640361"
+              "templateHash": "15960501156253114857"
             }
           },
           "parameters": {
@@ -4107,11 +4251,18 @@
               "metadata": {
                 "description": "Tags"
               }
+            },
+            "selfIp": {
+              "type": "string",
+              "metadata": {
+                "description": "Static IP of this domain controller. After promotion the NIC DNS client is reset to this IP as primary so the DC uses itself for DNS resolution — required for reliable AD replication, SYSVOL, and GPO delivery."
+              }
             }
           },
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
-            "q": "'"
+            "q": "'",
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
           },
           "resources": [
             {
@@ -4129,6 +4280,23 @@
                   "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/ResetDnsPostPromotion', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 120,
+                "source": {
+                  "script": "[variables('resetDnsScript')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[0], split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4177,6 +4345,9 @@
           "dsrmPassword": {
             "value": "[parameters('adminPassword')]"
           },
+          "selfIp": {
+            "value": "[parameters('dcSite1Ip')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller', 'site', 'site1'))]"
           }
@@ -4188,7 +4359,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "7638458125040640361"
+              "templateHash": "15960501156253114857"
             }
           },
           "parameters": {
@@ -4240,11 +4411,18 @@
               "metadata": {
                 "description": "Tags"
               }
+            },
+            "selfIp": {
+              "type": "string",
+              "metadata": {
+                "description": "Static IP of this domain controller. After promotion the NIC DNS client is reset to this IP as primary so the DC uses itself for DNS resolution — required for reliable AD replication, SYSVOL, and GPO delivery."
+              }
             }
           },
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
-            "q": "'"
+            "q": "'",
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
           },
           "resources": [
             {
@@ -4262,6 +4440,23 @@
                   "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/ResetDnsPostPromotion', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 120,
+                "source": {
+                  "script": "[variables('resetDnsScript')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[0], split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4310,6 +4505,9 @@
           "dsrmPassword": {
             "value": "[parameters('adminPassword')]"
           },
+          "selfIp": {
+            "value": "[parameters('dcSite2Ip')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller', 'site', 'site2'))]"
           }
@@ -4321,7 +4519,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "7638458125040640361"
+              "templateHash": "15960501156253114857"
             }
           },
           "parameters": {
@@ -4373,11 +4571,18 @@
               "metadata": {
                 "description": "Tags"
               }
+            },
+            "selfIp": {
+              "type": "string",
+              "metadata": {
+                "description": "Static IP of this domain controller. After promotion the NIC DNS client is reset to this IP as primary so the DC uses itself for DNS resolution — required for reliable AD replication, SYSVOL, and GPO delivery."
+              }
             }
           },
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
-            "q": "'"
+            "q": "'",
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
           },
           "resources": [
             {
@@ -4395,6 +4600,23 @@
                   "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/ResetDnsPostPromotion', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 120,
+                "source": {
+                  "script": "[variables('resetDnsScript')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[0], split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -4706,6 +4928,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dc01Ip')]",
+              "[parameters('dc02Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'entra-connect'))]"
           }
@@ -4717,7 +4945,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -4774,9 +5002,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -4853,6 +5085,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -4896,7 +5135,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -5033,6 +5275,9 @@
           "dsrmPassword": {
             "value": "[parameters('adminPassword')]"
           },
+          "selfIp": {
+            "value": "[parameters('dc02Ip')]"
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'domain-controller'))]"
           }
@@ -5044,7 +5289,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "7638458125040640361"
+              "templateHash": "15960501156253114857"
             }
           },
           "parameters": {
@@ -5096,11 +5341,18 @@
               "metadata": {
                 "description": "Tags"
               }
+            },
+            "selfIp": {
+              "type": "string",
+              "metadata": {
+                "description": "Static IP of this domain controller. After promotion the NIC DNS client is reset to this IP as primary so the DC uses itself for DNS resolution — required for reliable AD replication, SYSVOL, and GPO delivery."
+              }
             }
           },
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
-            "q": "'"
+            "q": "'",
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
           },
           "resources": [
             {
@@ -5118,6 +5370,23 @@
                   "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/runCommands",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}/ResetDnsPostPromotion', parameters('vmName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "asyncExecution": false,
+                "timeoutInSeconds": 120,
+                "source": {
+                  "script": "[variables('resetDnsScript')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[0], split(format('{0}/PromoteReplicaDC', parameters('vmName')), '/')[1])]"
+              ]
             }
           ],
           "outputs": {
@@ -5730,6 +5999,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcMainIp')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server', 'site', 'main'))]"
           }
@@ -5741,7 +6016,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -5798,9 +6073,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -5877,6 +6156,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -5920,7 +6206,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -6076,6 +6365,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcMainIp')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server', 'site', 'main'))]"
           }
@@ -6087,7 +6382,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -6144,9 +6439,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -6223,6 +6522,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -6266,7 +6572,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -6422,6 +6731,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcSite1Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server', 'site', 'site1'))]"
           }
@@ -6433,7 +6748,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -6490,9 +6805,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -6569,6 +6888,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -6612,7 +6938,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -6774,6 +7103,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcSite2Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server-aoag', 'site', 'site2', 'aoagNode', '1'))]"
           }
@@ -6785,7 +7120,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -6842,9 +7177,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -6921,6 +7260,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -6964,7 +7310,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -7128,6 +7477,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcSite2Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'sql-server-aoag', 'site', 'site2', 'aoagNode', '2'))]"
           }
@@ -7139,7 +7494,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -7196,9 +7551,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -7275,6 +7634,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -7318,7 +7684,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -8250,6 +8619,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcMainIp')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', if(parameters('colocateSql'), 'cas-sql', 'cas'), 'site', 'main'))]"
           }
@@ -8261,7 +8636,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -8318,9 +8693,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -8397,6 +8776,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -8440,7 +8826,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -8590,6 +8979,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcMainIp')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', if(parameters('colocateSql'), 'child-primary-sql', 'child-primary'), 'site', 'main'))]"
           }
@@ -8601,7 +8996,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -8658,9 +9053,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -8737,6 +9136,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -8780,7 +9186,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -8930,6 +9339,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcSite1Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', if(parameters('colocateSql'), 'child-primary-sql', 'child-primary'), 'site', 'site1'))]"
           }
@@ -8941,7 +9356,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -8998,9 +9413,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -9077,6 +9496,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -9120,7 +9546,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {
@@ -9267,6 +9696,12 @@
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
+          "dnsServers": {
+            "value": [
+              "[parameters('dcSite2Ip')]",
+              "[parameters('dc01Ip')]"
+            ]
+          },
           "tags": {
             "value": "[union(variables('commonTags'), createObject('role', 'child-primary', 'site', 'site2'))]"
           }
@@ -9278,7 +9713,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "2586549761866347546"
+              "templateHash": "3039599011855825867"
             }
           },
           "parameters": {
@@ -9335,9 +9770,13 @@
             },
             "imageSku": {
               "type": "string",
-              "defaultValue": "2022-datacenter-g2",
+              "defaultValue": "2025-datacenter-g2",
+              "allowedValues": [
+                "2022-datacenter-g2",
+                "2025-datacenter-g2"
+              ],
               "metadata": {
-                "description": "OS image SKU"
+                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
               }
             },
             "imageVersion": {
@@ -9414,6 +9853,13 @@
               "metadata": {
                 "description": "Tags to apply to all resources"
               }
+            },
+            "dnsServers": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
+              }
             }
           },
           "variables": {
@@ -9457,7 +9903,10 @@
                       "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
                     }
                   }
-                ]
+                ],
+                "dnsSettings": {
+                  "dnsServers": "[parameters('dnsServers')]"
+                }
               }
             },
             {

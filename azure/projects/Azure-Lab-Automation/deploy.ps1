@@ -1349,13 +1349,18 @@ if ($LASTEXITCODE -ne 0) {
 if ($VmTimeZone -ne 'UTC') {
     Write-Header "Setting VM Timezone to $VmTimeZone"
 
-    # Build list of VMs and their resource groups
+    # Build list of VMs and their resource groups.
+    # DC01/DC02 live in the identity RG; the per-site DCs (DC03/DC04/DC05) are
+    # always deployed (Tier 1+) into the main/site1/site2 RGs.
     $vmTargets = @(
         @{ Name = "$BaseName-dc01"; RG = "$BaseName-rg-identity" }
         @{ Name = "$BaseName-dc02"; RG = "$BaseName-rg-identity" }
+        @{ Name = "$BaseName-dc03"; RG = "$BaseName-rg-main" }
+        @{ Name = "$BaseName-dc04"; RG = "$BaseName-rg-site1" }
+        @{ Name = "$BaseName-dc05"; RG = "$BaseName-rg-site2" }
     )
     if ($EnableEntraBool -and $EntraConnectPlacement -eq 'dedicated') {
-        $vmTargets += @{ Name = "$BaseName-aadcs"; RG = "$BaseName-rg-identity" }
+        $vmTargets += @{ Name = "$BaseName-entr"; RG = "$BaseName-rg-identity" }
     }
     if ($DeploymentTier -ge 2) {
         if (-not $ColocateSqlBool) {
@@ -1467,7 +1472,7 @@ Write-Host "  Deployed VMs:" -ForegroundColor Cyan
 Write-Host "    Identity : $BaseName-dc01, $BaseName-dc02" -ForegroundColor Gray
 if ($EnableEntraBool) {
     if ($EntraConnectPlacement -eq 'dedicated') {
-        Write-Host "    EntraSync: $BaseName-aadcs (Entra Connect Sync)" -ForegroundColor Gray
+        Write-Host "    EntraSync: $BaseName-entr (Entra Connect Sync)" -ForegroundColor Gray
     } else {
         Write-Host "    EntraSync: Installed on $BaseName-dc02" -ForegroundColor Gray
     }
@@ -1517,7 +1522,7 @@ if ($JoinDomainBool) {
 if ($EnableEntraBool) {
     Write-Host ""
     Write-Host "  ** ENTRA ID INTEGRATION (manual post-deployment steps) **" -ForegroundColor Cyan
-    $entraConnectVm = if ($EntraConnectPlacement -eq 'dedicated') { "$BaseName-aadcs" } else { "$BaseName-dc02" }
+    $entraConnectVm = if ($EntraConnectPlacement -eq 'dedicated') { "$BaseName-entr" } else { "$BaseName-dc02" }
     Write-Host "  A) Complete Entra Connect wizard on $entraConnectVm :" -ForegroundColor White
     Write-Host "     1. RDP/Bastion into $entraConnectVm" -ForegroundColor Gray
     Write-Host "     2. Launch 'Azure AD Connect' from desktop" -ForegroundColor Gray

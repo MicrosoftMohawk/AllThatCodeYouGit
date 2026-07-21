@@ -4,10 +4,13 @@
 // Uses the JsonADDomainExtension (Microsoft.Compute.JsonADDomainExtension)
 // to join the target VM to the specified AD domain.
 //
-// A RunCommand-based DNS readiness check runs first, clearing the DNS client
-// cache and polling for the domain's SRV records. This prevents the common
-// Azure timing issue where member VMs cannot yet reach the DC's DNS service
-// even though the DCs are fully promoted.
+// A RunCommand-based readiness check runs first: it flushes the DNS cache and
+// polls until an actual domain controller can be LOCATED and CONTACTED via the
+// DC locator (nltest /dsgetdc), not merely until the SRV record resolves. This
+// prevents the common Azure timing issue where the SRV record already exists in
+// DNS but the DC is not yet advertising (e.g. a freshly promoted replica DC
+// whose SYSVOL is still replicating), which otherwise fails the join with
+// error 0x54b (ERROR_NO_SUCH_DOMAIN).
 //
 // Prerequisites:
 //   - The domain must be reachable from the VM's subnet (VNet DNS set to DCs).
@@ -47,9 +50,15 @@ param tags object = {}
 var domainJoinOptions = 3
 
 // ---------------------------------------------------------------------------
-// Step 1 - DNS Readiness Check (RunCommand)
-// Flush the local DNS cache and poll until the domain's LDAP SRV record is
-// resolvable. Retries up to 30 times (10 s apart ~ 5 min) before failing.
+// Step 1 - Domain Controller Readiness Check (RunCommand)
+// Flush the DNS cache, then poll until an actual, live domain controller can be
+// LOCATED and CONTACTED -- not just until the SRV record resolves. The DC
+// locator (nltest /dsgetdc) performs the same DsGetDcName call the domain-join
+// extension uses, so this only succeeds when a real join would succeed. It
+// closes the timing gap where the SRV record already exists in DNS but the DC
+// is not yet advertising (e.g. a freshly promoted replica DC whose SYSVOL is
+// still replicating), which otherwise fails the join with error 0x54b
+// (ERROR_NO_SUCH_DOMAIN). Retries up to 60 times (15 s apart ~ 15 min).
 // ---------------------------------------------------------------------------
 resource dnsReadyCheck 'Microsoft.Compute/virtualMachines/runCommands@2024-03-01' = {
   name: '${vmName}/DnsReadyCheck'
@@ -57,30 +66,44 @@ resource dnsReadyCheck 'Microsoft.Compute/virtualMachines/runCommands@2024-03-01
   tags: tags
   properties: {
     asyncExecution: false
-    timeoutInSeconds: 600
+    timeoutInSeconds: 1200
     source: {
       script: '''
         param([string]$DomainName)
 
-        $srvTarget = "_ldap._tcp.dc._msdcs.$DomainName"
-        $maxAttempts = 30
-        $sleepSec    = 10
+        $srvTarget   = "_ldap._tcp.dc._msdcs.$DomainName"
+        $maxAttempts = 60
+        $sleepSec    = 15
 
-        Write-Output "Validating DNS resolution for domain: $DomainName"
-        Write-Output "Looking up SRV record: $srvTarget"
+        Write-Output "Validating domain controller availability for: $DomainName"
+        Write-Output "SRV target: $srvTarget"
 
         for ($i = 1; $i -le $maxAttempts; $i++) {
             Clear-DnsClientCache
+
+            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).
             $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue
-            if ($srv) {
-                Write-Output "DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)"
+            if (-not $srv) {
+                Write-Output "Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s..."
+                Start-Sleep -Seconds $sleepSec
+                continue
+            }
+
+            # Stage 2 - the DC locator must find AND contact a live, advertising
+            # DC. nltest issues the same DsGetDcName call the join uses, so a
+            # success here means the join will not fail with 0x54b.
+            $dcInfo = & nltest.exe "/dsgetdc:$DomainName" "/force" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Output "DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable."
+                Write-Output $dcInfo
                 exit 0
             }
-            Write-Output "Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s..."
+
+            Write-Output "Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s..."
             Start-Sleep -Seconds $sleepSec
         }
 
-        throw "DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget"
+        throw "No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured."
       '''
     }
     parameters: [

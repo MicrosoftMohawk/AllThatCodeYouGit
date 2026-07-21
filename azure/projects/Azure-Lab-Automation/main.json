@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "8005013430551446130"
+      "templateHash": "12388032737597268220"
     }
   },
   "parameters": {
@@ -3736,7 +3736,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18441309672840787413"
+              "templateHash": "10951847179431090700"
             }
           },
           "parameters": {
@@ -3799,7 +3799,7 @@
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
             "q": "'",
-            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $ok = $false; for ($i = 0; $i -lt 40; $i++) {{ if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ $ok = $true; break }}; Start-Sleep 15 }}; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; if (-not $ok) {{ Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; ipconfig /registerdns; Stop-Transcript; throw {3}Replica DC promotion did not complete: NTDS not running after 600s. DNS left at primary DC {4} for retry.{5} }}; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {6}{7}{8}, {9}{10}{11}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Write-Output {12}Replica DC verified: NTDS running; DNS reset to self-first.{13}; Stop-Transcript', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), variables('q'))]"
           },
           "resources": [
             {
@@ -3814,7 +3814,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; $dcWait = 0; $dcReady = $false; while ($dcWait -lt 600) {{ nltest /dsgetdc:{13}{14}{15} | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dcReady = $true; Write-Output {16}Live DC located{17}; break }}; Start-Sleep 15; $dcWait += 15 }}; if (-not $dcReady) {{ throw {18}No live DC located for {19} within 600s{20} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {21}Already a domain controller -- skipping replica promotion{22} }} else {{ $pw = ConvertTo-SecureString {23}{24}{25} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {26}{27}{28} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({29}{30}\\{31}{32}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {33}DC promotion attempt $attempt of $maxRetries{34}; try {{ Install-ADDSDomainController -DomainName {35}{36}{37} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {38}Attempt $attempt failed: $_{39}; if ($attempt -lt $maxRetries) {{ Write-Output {40}Waiting 60s before retry...{41}; Start-Sleep 60 }} else {{ throw {42}DC promotion failed after $maxRetries attempts: $_{43} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
             },
@@ -3826,7 +3826,7 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 120,
+                "timeoutInSeconds": 900,
                 "source": {
                   "script": "[variables('resetDnsScript')]"
                 }
@@ -3846,7 +3846,7 @@
       },
       "dependsOn": [
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgMain')), 'Microsoft.Resources/deployments', 'deploy-dc-main')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc01')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc02')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgMain'))]"
       ]
     },
@@ -3896,7 +3896,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18441309672840787413"
+              "templateHash": "10951847179431090700"
             }
           },
           "parameters": {
@@ -3959,7 +3959,7 @@
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
             "q": "'",
-            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $ok = $false; for ($i = 0; $i -lt 40; $i++) {{ if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ $ok = $true; break }}; Start-Sleep 15 }}; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; if (-not $ok) {{ Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; ipconfig /registerdns; Stop-Transcript; throw {3}Replica DC promotion did not complete: NTDS not running after 600s. DNS left at primary DC {4} for retry.{5} }}; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {6}{7}{8}, {9}{10}{11}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Write-Output {12}Replica DC verified: NTDS running; DNS reset to self-first.{13}; Stop-Transcript', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), variables('q'))]"
           },
           "resources": [
             {
@@ -3974,7 +3974,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; $dcWait = 0; $dcReady = $false; while ($dcWait -lt 600) {{ nltest /dsgetdc:{13}{14}{15} | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dcReady = $true; Write-Output {16}Live DC located{17}; break }}; Start-Sleep 15; $dcWait += 15 }}; if (-not $dcReady) {{ throw {18}No live DC located for {19} within 600s{20} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {21}Already a domain controller -- skipping replica promotion{22} }} else {{ $pw = ConvertTo-SecureString {23}{24}{25} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {26}{27}{28} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({29}{30}\\{31}{32}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {33}DC promotion attempt $attempt of $maxRetries{34}; try {{ Install-ADDSDomainController -DomainName {35}{36}{37} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {38}Attempt $attempt failed: $_{39}; if ($attempt -lt $maxRetries) {{ Write-Output {40}Waiting 60s before retry...{41}; Start-Sleep 60 }} else {{ throw {42}DC promotion failed after $maxRetries attempts: $_{43} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
             },
@@ -3986,7 +3986,7 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 120,
+                "timeoutInSeconds": 900,
                 "source": {
                   "script": "[variables('resetDnsScript')]"
                 }
@@ -4006,7 +4006,7 @@
       },
       "dependsOn": [
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite1')), 'Microsoft.Resources/deployments', 'deploy-dc-site1')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc01')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgMain')), 'Microsoft.Resources/deployments', 'deploy-promote-dc-main')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite1'))]"
       ]
     },
@@ -4056,7 +4056,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18441309672840787413"
+              "templateHash": "10951847179431090700"
             }
           },
           "parameters": {
@@ -4119,7 +4119,7 @@
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
             "q": "'",
-            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $ok = $false; for ($i = 0; $i -lt 40; $i++) {{ if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ $ok = $true; break }}; Start-Sleep 15 }}; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; if (-not $ok) {{ Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; ipconfig /registerdns; Stop-Transcript; throw {3}Replica DC promotion did not complete: NTDS not running after 600s. DNS left at primary DC {4} for retry.{5} }}; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {6}{7}{8}, {9}{10}{11}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Write-Output {12}Replica DC verified: NTDS running; DNS reset to self-first.{13}; Stop-Transcript', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), variables('q'))]"
           },
           "resources": [
             {
@@ -4134,7 +4134,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; $dcWait = 0; $dcReady = $false; while ($dcWait -lt 600) {{ nltest /dsgetdc:{13}{14}{15} | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dcReady = $true; Write-Output {16}Live DC located{17}; break }}; Start-Sleep 15; $dcWait += 15 }}; if (-not $dcReady) {{ throw {18}No live DC located for {19} within 600s{20} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {21}Already a domain controller -- skipping replica promotion{22} }} else {{ $pw = ConvertTo-SecureString {23}{24}{25} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {26}{27}{28} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({29}{30}\\{31}{32}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {33}DC promotion attempt $attempt of $maxRetries{34}; try {{ Install-ADDSDomainController -DomainName {35}{36}{37} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {38}Attempt $attempt failed: $_{39}; if ($attempt -lt $maxRetries) {{ Write-Output {40}Waiting 60s before retry...{41}; Start-Sleep 60 }} else {{ throw {42}DC promotion failed after $maxRetries attempts: $_{43} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
             },
@@ -4146,7 +4146,7 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 120,
+                "timeoutInSeconds": 900,
                 "source": {
                   "script": "[variables('resetDnsScript')]"
                 }
@@ -4166,7 +4166,7 @@
       },
       "dependsOn": [
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-dc-site2')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc01')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite1')), 'Microsoft.Resources/deployments', 'deploy-promote-dc-site1')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]"
       ]
     },
@@ -4826,7 +4826,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18441309672840787413"
+              "templateHash": "10951847179431090700"
             }
           },
           "parameters": {
@@ -4889,7 +4889,7 @@
           "variables": {
             "netbiosName": "[toUpper(split(parameters('domainName'), '.')[0])]",
             "q": "'",
-            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}, {3}{4}{5}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Stop-Transcript', variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'))]"
+            "resetDnsScript": "[format('Start-Transcript -Path C:\\WindowsTemp\\ResetDns.log -Append; $ok = $false; for ($i = 0; $i -lt 40; $i++) {{ if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ $ok = $true; break }}; Start-Sleep 15 }}; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; if (-not $ok) {{ Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; ipconfig /registerdns; Stop-Transcript; throw {3}Replica DC promotion did not complete: NTDS not running after 600s. DNS left at primary DC {4} for retry.{5} }}; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {6}{7}{8}, {9}{10}{11}; Start-Sleep -Seconds 10; ipconfig /registerdns; Restart-Service Netlogon -Force -ErrorAction SilentlyContinue; Write-Output {12}Replica DC verified: NTDS running; DNS reset to self-first.{13}; Stop-Transcript', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('selfIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), variables('q'))]"
           },
           "resources": [
             {
@@ -4904,7 +4904,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {13}Already a domain controller -- skipping replica promotion{14} }} else {{ $pw = ConvertTo-SecureString {15}{16}{17} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {18}{19}{20} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({21}{22}\\{23}{24}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {25}DC promotion attempt $attempt of $maxRetries{26}; try {{ Install-ADDSDomainController -DomainName {27}{28}{29} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {30}Attempt $attempt failed: $_{31}; if ($attempt -lt $maxRetries) {{ Write-Output {32}Waiting 60s before retry...{33}; Start-Sleep 60 }} else {{ throw {34}DC promotion failed after $maxRetries attempts: $_{35} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Bypass -Command \"Start-Transcript -Path C:\\WindowsTemp\\ReplicaDC.log -Append; $nic = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1; Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses {0}{1}{2}; Write-Output {3}DNS set to {4}{5}; $maxWait = 900; $waited = 0; while ($waited -lt $maxWait) {{ try {{ Resolve-DnsName {6}{7}{8} -DnsOnly -ErrorAction Stop | Out-Null; Write-Output {9}Domain DNS resolved{10}; break }} catch {{ Start-Sleep 15; $waited += 15 }} }}; if ($waited -ge $maxWait) {{ throw {11}Domain not reachable within 900s{12} }}; $dcWait = 0; $dcReady = $false; while ($dcWait -lt 600) {{ nltest /dsgetdc:{13}{14}{15} | Out-Null; if ($LASTEXITCODE -eq 0) {{ $dcReady = $true; Write-Output {16}Live DC located{17}; break }}; Start-Sleep 15; $dcWait += 15 }}; if (-not $dcReady) {{ throw {18}No live DC located for {19} within 600s{20} }}; Install-WindowsFeature AD-Domain-Services -IncludeManagementTools; if (Get-Service NTDS -ErrorAction SilentlyContinue | Where-Object Status -eq Running) {{ Write-Output {21}Already a domain controller -- skipping replica promotion{22} }} else {{ $pw = ConvertTo-SecureString {23}{24}{25} -AsPlainText -Force; $dsrm = ConvertTo-SecureString {26}{27}{28} -AsPlainText -Force; $cred = New-Object System.Management.Automation.PSCredential({29}{30}\\{31}{32}, $pw); $maxRetries = 10; $attempt = 0; $promoted = $false; while (-not $promoted -and $attempt -lt $maxRetries) {{ $attempt++; Write-Output {33}DC promotion attempt $attempt of $maxRetries{34}; try {{ Install-ADDSDomainController -DomainName {35}{36}{37} -Credential $cred -SafeModeAdministratorPassword $dsrm -InstallDns:$true -NoRebootOnCompletion:$false -Force:$true; $promoted = $true }} catch {{ Write-Output {38}Attempt $attempt failed: $_{39}; if ($attempt -lt $maxRetries) {{ Write-Output {40}Waiting 60s before retry...{41}; Start-Sleep 60 }} else {{ throw {42}DC promotion failed after $maxRetries attempts: $_{43} }} }} }} }}; Stop-Transcript\"', variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('primaryDcIp'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('adminPassword'), variables('q'), variables('q'), parameters('dsrmPassword'), variables('q'), variables('q'), variables('netbiosName'), parameters('adminUsername'), variables('q'), variables('q'), variables('q'), variables('q'), parameters('domainName'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'), variables('q'))]"
                 }
               }
             },
@@ -4916,7 +4916,7 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 120,
+                "timeoutInSeconds": 900,
                 "source": {
                   "script": "[variables('resetDnsScript')]"
                 }
@@ -4981,7 +4981,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -5042,9 +5042,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -5235,8 +5235,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcMainIp')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcMainIp')]"
             ]
           },
           "tags": {
@@ -5601,8 +5601,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcMainIp')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcMainIp')]"
             ]
           },
           "tags": {
@@ -5967,8 +5967,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcSite1Ip')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcSite1Ip')]"
             ]
           },
           "tags": {
@@ -6333,8 +6333,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcSite2Ip')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcSite2Ip')]"
             ]
           },
           "tags": {
@@ -6687,7 +6687,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -6748,9 +6748,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -6843,7 +6843,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -6904,9 +6904,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -6999,7 +6999,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -7060,9 +7060,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -7155,7 +7155,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -7216,9 +7216,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -7317,8 +7317,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcMainIp')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcMainIp')]"
             ]
           },
           "tags": {
@@ -7677,8 +7677,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcMainIp')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcMainIp')]"
             ]
           },
           "tags": {
@@ -8037,8 +8037,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcSite1Ip')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcSite1Ip')]"
             ]
           },
           "tags": {
@@ -8397,8 +8397,8 @@
           },
           "dnsServers": {
             "value": [
-              "[parameters('dcSite2Ip')]",
-              "[parameters('dc01Ip')]"
+              "[parameters('dc01Ip')]",
+              "[parameters('dcSite2Ip')]"
             ]
           },
           "tags": {
@@ -8751,7 +8751,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -8812,9 +8812,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -8907,7 +8907,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -8968,9 +8968,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -9063,7 +9063,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -9124,9 +9124,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {
@@ -9219,7 +9219,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
+              "templateHash": "8482333837214644710"
             }
           },
           "parameters": {
@@ -9280,9 +9280,9 @@
               "tags": "[parameters('tags')]",
               "properties": {
                 "asyncExecution": false,
-                "timeoutInSeconds": 600,
+                "timeoutInSeconds": 1200,
                 "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
+                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget   = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 60\r\n        $sleepSec    = 15\r\n\r\n        Write-Output \"Validating domain controller availability for: $DomainName\"\r\n        Write-Output \"SRV target: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n\r\n            # Stage 1 - the SRV record must resolve (a DC has registered in DNS).\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if (-not $srv) {\r\n                Write-Output \"Attempt $i/${maxAttempts}: SRV record not resolvable yet, retrying in ${sleepSec}s...\"\r\n                Start-Sleep -Seconds $sleepSec\r\n                continue\r\n            }\r\n\r\n            # Stage 2 - the DC locator must find AND contact a live, advertising\r\n            # DC. nltest issues the same DsGetDcName call the join uses, so a\r\n            # success here means the join will not fail with 0x54b.\r\n            $dcInfo = & nltest.exe \"/dsgetdc:$DomainName\" \"/force\" 2>&1\r\n            if ($LASTEXITCODE -eq 0) {\r\n                Write-Output \"DC locator succeeded on attempt $i -- a live DC for $DomainName is reachable.\"\r\n                Write-Output $dcInfo\r\n                exit 0\r\n            }\r\n\r\n            Write-Output \"Attempt $i/${maxAttempts}: SRV resolves but no live DC reachable yet (nltest exit $LASTEXITCODE), retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"No reachable domain controller for '$DomainName' after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). The DC may still be completing promotion / SYSVOL replication, or DNS/network connectivity to the DC is misconfigured.\"\r\n      "
                 },
                 "parameters": [
                   {

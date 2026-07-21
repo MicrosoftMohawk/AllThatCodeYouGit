@@ -519,12 +519,17 @@ module promoteDc01 'modules/identity/promoteDC.bicep' = {
   }
 }
 
-// --- Promote site DCs as replica domain controllers -------------------------
+// --- Promote replica DCs SEQUENTIALLY: DC02 -> DC03 -> DC04 -> DC05 ----------
+// Chained via dependsOn so only ONE replica promotes at a time. Promoting all
+// replicas concurrently against a freshly promoted DC01 caused the remote-site
+// DCs (DC04/DC05) to fail promotion (DNS / DC-locator race) while the extension
+// still reported success. Sequencing lets each DC fully promote, reboot, and
+// replicate before the next one begins.
 
 module promoteDcMain 'modules/identity/replicaDC.bicep' = {
   name: 'deploy-promote-dc-main'
   scope: rgMainSite
-  dependsOn: [dcMain, promoteDc01]
+  dependsOn: [dcMain, promoteDc02]
   params: {
     vmName: dcMainName
     location: location
@@ -541,7 +546,7 @@ module promoteDcMain 'modules/identity/replicaDC.bicep' = {
 module promoteDcSite1 'modules/identity/replicaDC.bicep' = {
   name: 'deploy-promote-dc-site1'
   scope: rgSite1Res
-  dependsOn: [dcSite1, promoteDc01]
+  dependsOn: [dcSite1, promoteDcMain]
   params: {
     vmName: dcSite1Name
     location: location
@@ -558,7 +563,7 @@ module promoteDcSite1 'modules/identity/replicaDC.bicep' = {
 module promoteDcSite2 'modules/identity/replicaDC.bicep' = {
   name: 'deploy-promote-dc-site2'
   scope: rgSite2Res
-  dependsOn: [dcSite2, promoteDc01]
+  dependsOn: [dcSite2, promoteDcSite1]
   params: {
     vmName: dcSite2Name
     location: location
@@ -691,7 +696,7 @@ module sqlCas 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateS
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcMainIp, dc01Ip]
+    dnsServers: [dc01Ip, dcMainIp]
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -715,7 +720,7 @@ module sqlPrima 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcMainIp, dc01Ip]
+    dnsServers: [dc01Ip, dcMainIp]
     tags: union(commonTags, { role: 'sql-server', site: 'main' })
   }
 }
@@ -739,7 +744,7 @@ module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcSite1Ip, dc01Ip]
+    dnsServers: [dc01Ip, dcSite1Ip]
     tags: union(commonTags, { role: 'sql-server', site: 'site1' })
   }
 }
@@ -763,7 +768,7 @@ module sqlPrimc 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcSite2Ip, dc01Ip]
+    dnsServers: [dc01Ip, dcSite2Ip]
     tags: union(commonTags, { role: 'sql-server', site: 'site2' })
   }
 }
@@ -854,7 +859,7 @@ module casVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcMainIp, dc01Ip]
+    dnsServers: [dc01Ip, dcMainIp]
     tags: union(commonTags, { role: colocateSql ? 'cas-sql' : 'cas', site: 'main' })
   }
 }
@@ -878,7 +883,7 @@ module primaVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcMainIp, dc01Ip]
+    dnsServers: [dc01Ip, dcMainIp]
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'main' })
   }
 }
@@ -902,7 +907,7 @@ module primbVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcSite1Ip, dc01Ip]
+    dnsServers: [dc01Ip, dcSite1Ip]
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'site1' })
   }
 }
@@ -926,7 +931,7 @@ module primcVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     dataDiskSizeGb: colocateSql ? 128 : 0
     dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
-    dnsServers: [dcSite2Ip, dc01Ip]
+    dnsServers: [dc01Ip, dcSite2Ip]
     tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'site2' })
   }
 }

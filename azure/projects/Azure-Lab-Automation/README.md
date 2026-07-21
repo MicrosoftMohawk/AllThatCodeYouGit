@@ -46,6 +46,8 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 
 > **\*** *EntraConnect is deployed only when `enableEntraIntegration=true` and `entraConnectPlacement='dedicated'` (otherwise Entra Connect installs on DC02). MgmtVM is deployed separately via `deploy-mgmt.ps1` after the main lab deployment completes.*
 
+> **NAT Gateway:** *A NAT Gateway (`{base}-natgw`) provides outbound internet egress for all VM subnets (snet-ad, snet-main, snet-site1, snet-site2) — required for DC DNS forwarding, Entra Connect download, and management-tool installs. Inbound access is via Azure Bastion and the P2S VPN only.*
+
 ### VM Inventory
 
 The lab deploys up to **13 VMs** (or fewer with `colocateSql`), plus up to **2 additional VMs** when Entra ID integration is enabled.
@@ -166,7 +168,7 @@ The deployment uses a **tiered** approach so you can deploy incrementally:
 
 | Tier | What Gets Deployed | Use Case |
 |------|-------------------|----------|
-| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
+| **1** | VNet, Subnets, NSGs, NAT Gateway, Azure Bastion, VPN Gateway (P2S), **5 DCs across 4 AD sites** (static IPs — DC01/DC02 in the identity subnet; DC03/DC04/DC05 in the main/site1/site2 subnets), Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DCs, AD Sites & Services) | Set up core networking, VPN, and AD only |
 | **2** | + SQL VMs (with data disks), one per site (CAS, PrimA, PrimB, PrimC). Standalone SQL VMs are skipped when `colocateSql` is true (SQL colocated on MCM). **Auto domain-join** SQL VMs (unless `joinDomain=false`). | Add SQL infrastructure |
 | **3** | + MCM Application VMs (CAS + 3 child primaries). When `colocateSql` is true, MCM VMs are upsized and get data disks for SQL. **Auto domain-join** MCM VMs (unless `joinDomain=false`). | Full lab deployment |
 
@@ -226,8 +228,11 @@ cd "Azure Lab"
 # Set VM timezone to Eastern (skips interactive prompt)
 .\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -TimeZone "Eastern Standard Time"
 
-# Deploy with Windows Server 2025 Datacenter (default: 2022)
+# Deploy with Windows Server 2025 Datacenter (default: 2025; use -OsImage 2022 for Server 2022)
 .\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -OsImage 2025
+
+# Override VM sizes and OS disk type (unset sizes fall back to Bicep defaults)
+.\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 3 -SizeSQL Standard_D4s_v6 -OsDiskSku StandardSSD_LRS
 
 # Supply domain name to skip interactive prompt / auto-detection
 .\deploy.ps1 -BaseName azlab -Location eastus -DeploymentTier 2 -DomainName azlab.local
@@ -327,16 +332,20 @@ Azure-Lab/
 ├── main.bicep                             # Subscription-scoped orchestrator (AD lab infrastructure)
 ├── mgmt.bicep                             # Resource-group-scoped: management VM + Entra ID join
 ├── bicepconfig.json                       # Bicep linter / analyzer config
-├── MECM-Azure-Global-Lab.ps1              # Original PowerShell script (reference)
-├── certs/                                 # Auto-generated VPN certificates
-│   ├── P2SRootCert.cer                    # Root CA public key (re-exported every deploy)
-│   ├── P2SClientCert.pfx                  # Client cert (re-exported with current admin password)
+├── Post-Deployment-DFSR-Validation.ps1    # Helper: validate DFSR/SYSVOL replication after DC promotion
+├── main.json / mgmt.json                  # Compiled ARM templates (generated from the *.bicep files)
+├── certs/                                 # Auto-generated VPN certificates (per BaseName)
+│   ├── P2SRootCert-{base}.cer             # Root CA public key (re-exported every deploy)
+│   ├── P2SClientCert-{base}.pfx           # Client cert (re-exported with current admin password)
 │   └── vpn-client/                        # Downloaded VPN client config (from helper script)
+├── scripts/
+│   └── Get-VMSizeAvailability.ps1         # Helper: check VM SKU availability in a region
 ├── parameters/
 │   └── main.bicepparam                    # Default parameter values (for direct az CLI use)
 └── modules/
     ├── network/
     │   ├── vnet.bicep                     # VNet + subnets + NSGs + GatewaySubnet + custom DNS
+    │   ├── natGateway.bicep               # NAT Gateway + Public IP (outbound egress for VM subnets)
     │   ├── bastion.bicep                  # Azure Bastion (Standard) + Public IP
     │   └── vpnGateway.bicep               # VPN Gateway (P2S, certificate auth) + Public IP
     ├── compute/
@@ -349,8 +358,8 @@ Azure-Lab/
     │   └── keyVaultPrivateEndpoint.bicep   # Key Vault PE + private DNS zone
     └── identity/
         ├── promoteDC.bicep                # CSE: Promote DC01 as first DC (new forest)
-        ├── configureAD.bicep              # RunCommand: OUs, groups, svc accounts, gMSA
-        ├── replicaDC.bicep                # CSE: Promote DC02 as replica DC
+        ├── configureAD.bicep              # RunCommand: OUs, groups, svc accounts, gMSA, AD Sites
+        ├── replicaDC.bicep                # CSE: Promote replica DCs (DC02–DC05)
         ├── domainJoin.bicep               # JsonADDomainExtension: join VM to AD domain
         ├── entraConnect.bicep             # RunCommand: Install Entra Connect Sync
         ├── entraIdJoin.bicep              # AADLoginForWindows extension (Entra ID join)
@@ -378,14 +387,22 @@ Azure-Lab/
 | `-ColocateSql` | switch | `$false` | When set, SQL runs on MCM servers (no separate SQL VMs) |
 | `-SkipDomainJoin` | switch | `$false` | When set, SQL and MCM VMs are NOT domain-joined (deployed as workgroup servers) |
 | `-TimeZone` | string | (prompt) | Windows timezone for all VMs (e.g., `Eastern Standard Time`). If omitted, an interactive menu is shown. |
-| `-OsImage` | string | (prompt) | OS image version: `2022` or `2025`. If omitted, an interactive menu is shown. |
+| `-OsImage` | string | (prompt) | OS image version: `2022` or `2025`. If omitted, an interactive menu is shown (default: `2025`). |
+| `-OsDiskSku` | string | `Premium_LRS` | OS disk storage type: `Premium_LRS`, `StandardSSD_LRS`, or `Standard_LRS` |
+| `-SizeDC` | string | (Bicep default) | Override VM size for Domain Controllers (default `Standard_D2s_v6`) |
+| `-SizeManagement` | string | (Bicep default) | Override VM size for the Management / Entra Connect VMs (default `Standard_D2s_v6`) |
+| `-SizeApp` | string | (Bicep default) | Override VM size for MCM servers when SQL is separate (default `Standard_D4s_v6`) |
+| `-SizeAppColocated` | string | (Bicep default) | Override VM size for MCM servers when SQL is colocated (default `Standard_D8s_v6`) |
+| `-SizeSQL` | string | (Bicep default) | Override VM size for standalone SQL VMs (default `Standard_D4s_v6`) |
 | `-SubscriptionId` | string | (current) | Target Azure subscription ID |
 | `-WhatIf` | switch | `$false` | Preview deployment changes without applying |
 | `-Destroy` | switch | `$false` | Delete all lab resource groups |
 | `-EnableEntraIntegration` | switch | `$false` | Enable Entra ID hybrid identity (Entra Connect, management VM, Entra ID join) |
 | `-EntraIdDomain` | string | (prompt) | Entra ID verified domain (e.g., `contoso.com`) |
 | `-DomainStrategy` | string | `subdomain` | `subdomain` = AD domain is `ad.<EntraIdDomain>`, `independent` = AD domain configured separately |
-| `-EntraConnectPlacement` | string | `dc02` | `dc02` = install Entra Connect on DC02, `dedicated` = deploy a separate Entra Connect VM |
+| `-EntraConnectPlacement` | string | `dedicated` | `dedicated` = deploy a separate Entra Connect VM, `dc02` = install Entra Connect on DC02 |
+
+> **Tip:** Use `scripts/Get-VMSizeAvailability.ps1 -Location <region> -LabSizes` to confirm the lab VM SKUs are available (and not restricted) in your target region before overriding sizes.
 
 ### Bicep Template Parameters (main.bicep)
 
@@ -403,6 +420,7 @@ Azure-Lab/
 | `sizeApp` | string | `Standard_D4s_v6` | VM size for MCM servers (when SQL is separate) |
 | `sizeAppColocated` | string | `Standard_D8s_v6` | VM size for MCM servers when SQL is colocated |
 | `sizeSQL` | string | `Standard_D4s_v6` | VM size for standalone SQL VMs (CAS, PrimA, PrimB, PrimC) |
+| `osDiskSku` | string | `Premium_LRS` | OS disk storage type (`Premium_LRS`, `StandardSSD_LRS`, `Standard_LRS`) |
 | **VM Naming** | | | |
 | `vmNameSqlCas` | string | `{base}-sqcs` | SQL VM for CAS site (ignored when colocateSql=true) |
 | `vmNameSqlPrimA` | string | `{base}-sqpa` | SQL VM for Primary A (ignored when colocateSql=true) |
@@ -429,12 +447,13 @@ Azure-Lab/
 | `kvPrincipalType` | string | `User` | Principal type for KV RBAC: `User` or `Group` |
 | `dc01Ip` | string | `10.0.1.4` | Static IP for DC01 |
 | `dc02Ip` | string | `10.0.1.5` | Static IP for DC02 |
+| `entraConnectIp` | string | `10.0.1.6` | Static IP for the Entra Connect VM (when placement = dedicated) |
 | `dcMainIp` | string | `10.0.20.250` | Static IP for DC in Main site subnet |
 | `dcSite1Ip` | string | `10.0.30.250` | Static IP for DC in Site 1 subnet |
 | `dcSite2Ip` | string | `10.0.40.250` | Static IP for DC in Site 2 subnet |
 | `imagePublisher` | string | `MicrosoftWindowsServer` | OS image publisher |
 | `imageOffer` | string | `WindowsServer` | OS image offer |
-| `imageSku` | string | `2022-datacenter-g2` | OS image SKU (`2022-datacenter-g2` or `2025-datacenter-g2`) |
+| `imageSku` | string | `2025-datacenter-g2` | OS image SKU (`2022-datacenter-g2` or `2025-datacenter-g2`) |
 | `envTag` | string | `lab` | Environment tag value |
 | **Private DNS Zone Reuse** | | | |
 | `existingKvDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.vaultcore` DNS zone (auto-detected by `deploy.ps1`) |
@@ -442,7 +461,7 @@ Azure-Lab/
 | `enableEntraIntegration` | bool | `false` | Enable Entra ID hybrid identity features |
 | `entraIdDomain` | string | `''` | Entra ID verified domain (e.g., `contoso.com`) |
 | `domainStrategy` | string | `subdomain` | `subdomain` = AD domain is `ad.<entraIdDomain>`, `independent` = separate names |
-| `entraConnectPlacement` | string | `dc02` | `dc02` = install on DC02, `dedicated` = separate VM |
+| `entraConnectPlacement` | string | `dedicated` | `dedicated` = separate VM, `dc02` = install on DC02 |
 | `vmNameMgmt` | string | `{base}-mgmt` | Management VM name (Entra ID joined) |
 | `vmNameEntraConnect` | string | `{base}-entr` | Entra Connect VM name (when placement = dedicated) |
 | `sizeManagement` | string | `Standard_D2s_v6` | VM size for Management VM and Entra Connect VM |
@@ -511,7 +530,7 @@ The VPN Gateway takes **25–45 minutes** to provision after deployment starts.
 3. **Root cert**: Added to `CurrentUser\Trusted Root Certification Authorities` automatically
 4. **Connect**: Extract the downloaded ZIP, run the VPN client configuration, then connect via Windows VPN settings
 5. **VPN address**: Your workstation will receive a `172.16.0.x` IP with full access to the `10.0.0.0/16` lab network
-6. **Certificates stored locally**: `certs/P2SRootCert.cer` and `certs/P2SClientCert.pfx` (PFX password = admin password from Key Vault)
+6. **Certificates stored locally**: `certs/P2SRootCert-{base}.cer` and `certs/P2SClientCert-{base}.pfx` (named per BaseName; PFX password = admin password from Key Vault)
 
 ### 1c. Connect via P2S VPN (Secondary Machine)
 To connect from a workstation that was **not** used to run `deploy.ps1`, use the helper script:
@@ -526,9 +545,12 @@ To connect from a workstation that was **not** used to run `deploy.ps1`, use the
    - Import the client PFX into `CurrentUser\My` (prompts for the PFX password)
 4. **Download the VPN client configuration** manually from the Azure Portal:
    `{baseName}-vpngw` → Point-to-site configuration → Download VPN client
-5. **PFX password**: This is the admin password from Key Vault. Retrieve it with:
+5. **PFX password**: This is the admin password from Key Vault. The Key Vault name has a unique suffix, so look it up first, then read the secret:
    ```bash
-   az keyvault secret show --vault-name {baseName}-kv --name vm-admin-password --query value -o tsv
+   # Discover the Key Vault name (it has a unique suffix):
+   az keyvault list --resource-group {baseName}-rg-identity --query "[0].name" -o tsv
+   # Then retrieve the admin password from that vault:
+   az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv
    ```
 
 > **Tip:** You can connect multiple machines — just copy the `certs/` folder and run `Install-VpnCerts.ps1` on each one.
@@ -597,6 +619,8 @@ AD DS is automatically configured during Tier 1 deployment:
 
 > **Note:** After DC promotion, VMs may need a restart to pick up the custom DNS settings. DCs reboot automatically after promotion.
 
+> **Validate replication:** Run `Post-Deployment-DFSR-Validation.ps1` on a DC about 15 minutes after the final DC promotion to confirm DFSR/SYSVOL health — it checks DFSR initialization (Event 4602), replication-group state, and that the default GPOs replicated to all 5 DCs. *(The script's `$dcs` list uses the reference deployment's DC names — adjust it to match your `{base}` if needed.)*
+
 ### 3. Domain Join (Automated by Default)
 By default, all SQL and MCM VMs are **automatically domain-joined** during deployment using the `svc-domjoin` service account (created by the AD automation in Tier 1).
 
@@ -607,6 +631,8 @@ By default, all SQL and MCM VMs are **automatically domain-joined** during deplo
 - The extension depends on AD configuration completing first (OUs and svc-domjoin must exist)
 
 If you deployed with `-SkipDomainJoin` (or `joinDomain=false`), VMs remain in a workgroup. You can domain-join them manually later using the `svc-domjoin` account.
+
+**Local administrators on MCM VMs:** After domain join (Tier 3 with `joinDomain=true`), the deploy script adds the domain group `GRP-MCMAdmins` to the local **Administrators** group on each MCM server (CAS, PrimA, PrimB, PrimC) via RunCommand. This grants `mcm-admin` — and any future `GRP-MCMAdmins` members — local admin rights on the MCM servers without requiring Domain Admins membership.
 
 ### 3a. Entra Connect Sync Setup (when `-EnableEntraIntegration`)
 
@@ -719,7 +745,7 @@ runas /netonly /user:yourdomain.lab\lab-admin "mmc dsa.msc"
 Alternatively, RSAT tools will prompt for credentials when you connect to a DC. The VNet DNS already points to the DCs (`10.0.1.4`, `10.0.1.5`), so AD is fully resolvable from the management VM.
 
 ### 4. VM Timezone (Automated)
-During deployment, the script prompts for a timezone (or accepts `-TimeZone`). After the Bicep deployment completes, the timezone is applied via `az vm run-command invoke` running `Set-TimeZone` on every deployed VM.
+During deployment, the script prompts for a timezone (or accepts `-TimeZone`). After the Bicep deployment completes, the timezone is applied via `az vm run-command invoke` running `Set-TimeZone` on the deployed VMs (DC01, DC02, and the SQL/MCM servers).
 
 - **Why not ARM?** Azure treats `windowsConfiguration.timeZone` as immutable on existing VMs — it can only be set at initial creation. Using RunCommand works on both new and existing VMs, making incremental deployments safe.
 - **Default**: If you press Enter at the prompt, **Eastern Standard Time** is selected.
@@ -760,11 +786,13 @@ Available presets:
 
 | Resource Group | Contents |
 |---------------|----------|
-| `{base}-rg-network` | VNet, NSGs, Azure Bastion, VPN Gateway, Public IPs |
+| `{base}-rg-network` | VNet, NSGs, NAT Gateway, Azure Bastion, VPN Gateway, Public IPs |
 | `{base}-rg-identity` | DC01, DC02, Key Vault |
-| `{base}-rg-main` | SQL-CAS, SQL-PrimA, CAS, PrimaryA (SQL VMs omitted when colocated) |
-| `{base}-rg-site1` | SQL-PrimB, PrimaryB (SQL VM omitted when colocated) |
-| `{base}-rg-site2` | SQL-PrimC, PrimaryC (SQL VM omitted when colocated) |
+| `{base}-rg-main` | DC03 (Tier 1) + SQL-CAS, SQL-PrimA, CAS, PrimaryA (SQL VMs omitted when colocated) |
+| `{base}-rg-site1` | DC04 (Tier 1) + SQL-PrimB, PrimaryB (SQL VM omitted when colocated) |
+| `{base}-rg-site2` | DC05 (Tier 1) + SQL-PrimC, PrimaryC (SQL VM omitted when colocated) |
+
+> **Note:** The `-rg-main`, `-rg-site1`, and `-rg-site2` resource groups are created in **Tier 1** to host the per-site domain controllers (DC03/DC04/DC05). SQL and MCM VMs are added to them in Tiers 2 and 3.
 
 ---
 
@@ -776,7 +804,14 @@ Remove the entire lab using the deploy script (recommended):
 .\deploy.ps1 -BaseName azlab -Destroy
 ```
 
-This will find all resource groups matching `{baseName}-rg-*`, confirm deletion, and delete them asynchronously.
+This performs a **dependency-aware teardown**:
+
+- Confirms exactly which lab resource groups exist (`-rg-network`, `-rg-identity`, `-rg-main`, `-rg-site1`, `-rg-site2`) and requires a typed `yes` to proceed.
+- **Cleans up cross-project dependencies first** — external Private Endpoints in `snet-pe` and Private DNS zone VNet links created by add-on projects (e.g., ArtifactsStorage) that reference the lab VNet. These would otherwise block VNet deletion.
+- Deletes the **non-network** resource groups first (asynchronously), waits for them to finish, then deletes the **network** resource group last (synchronously) so the VNet/subnets are removed only after dependent NICs are gone.
+- Verifies all resource groups are removed and reports anything still deleting.
+
+> **Note:** `-Location` is not required with `-Destroy`.
 
 Alternatively, delete resource groups manually:
 

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "668221760356035051"
+      "templateHash": "8005013430551446130"
     }
   },
   "parameters": {
@@ -117,44 +117,37 @@
     },
     "sizeDC": {
       "type": "string",
-      "defaultValue": "Standard_D2s_v5",
+      "defaultValue": "Standard_D2s_v6",
       "metadata": {
         "description": "VM size for Domain Controllers"
       }
     },
     "sizeManagement": {
       "type": "string",
-      "defaultValue": "Standard_D2s_v5",
+      "defaultValue": "Standard_D2s_v6",
       "metadata": {
         "description": "VM size for Management and Entra Connect VMs"
       }
     },
     "sizeApp": {
       "type": "string",
-      "defaultValue": "Standard_D4s_v5",
+      "defaultValue": "Standard_D4s_v6",
       "metadata": {
         "description": "VM size for MCM site servers (when SQL is separate)"
       }
     },
     "sizeAppColocated": {
       "type": "string",
-      "defaultValue": "Standard_D8s_v5",
+      "defaultValue": "Standard_D8s_v6",
       "metadata": {
         "description": "VM size for MCM site servers when SQL is colocated (needs more RAM/CPU)"
       }
     },
     "sizeSQL": {
       "type": "string",
-      "defaultValue": "Standard_D4s_v5",
+      "defaultValue": "Standard_D4s_v6",
       "metadata": {
-        "description": "VM size for standalone SQL VMs (CAS, PrimA, PrimB)"
-      }
-    },
-    "sizeSQLAoag": {
-      "type": "string",
-      "defaultValue": "Standard_D8s_v5",
-      "metadata": {
-        "description": "VM size for AOAG SQL VMs (Site 2 — PrimC)"
+        "description": "VM size for standalone SQL VMs (CAS, PrimA, PrimB, PrimC)"
       }
     },
     "osDiskSku": {
@@ -208,7 +201,7 @@
       "type": "string",
       "defaultValue": "10.0.40.0/24",
       "metadata": {
-        "description": "Site 2 subnet CIDR (PrimC, SQL-PrimC AOAG nodes, ILB)"
+        "description": "Site 2 subnet CIDR (PrimC, SQL-PrimC)"
       }
     },
     "snetGatewayPrefix": {
@@ -274,20 +267,6 @@
         "description": "Static IP for DC in Site 2 subnet"
       }
     },
-    "aoagListenerIp": {
-      "type": "string",
-      "defaultValue": "10.0.40.10",
-      "metadata": {
-        "description": "AOAG Listener IP (ILB frontend) in Site 2 subnet"
-      }
-    },
-    "existingFileDnsZoneId": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone)."
-      }
-    },
     "existingKvDnsZoneId": {
       "type": "string",
       "defaultValue": "",
@@ -299,7 +278,7 @@
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "When true, SQL is installed on the MCM server (no separate SQL VMs for CAS/PrimA/PrimB). Site 2 AOAG nodes are always deployed."
+        "description": "When true, SQL is installed on the MCM server (no separate SQL VMs for CAS/PrimA/PrimB/PrimC)."
       }
     },
     "joinDomain": {
@@ -333,20 +312,12 @@
         "description": "VM name: SQL for Primary B (ignored when colocateSql=true)"
       }
     },
-    "vmNameSqlAoag1": {
+    "vmNameSqlPrimC": {
       "type": "string",
-      "defaultValue": "[format('{0}-sqc1', parameters('baseName'))]",
+      "defaultValue": "[format('{0}-sqpc', parameters('baseName'))]",
       "maxLength": 15,
       "metadata": {
-        "description": "VM name: AOAG SQL node 1 at Site 2"
-      }
-    },
-    "vmNameSqlAoag2": {
-      "type": "string",
-      "defaultValue": "[format('{0}-sqc2', parameters('baseName'))]",
-      "maxLength": 15,
-      "metadata": {
-        "description": "VM name: AOAG SQL node 2 at Site 2"
+        "description": "VM name: SQL for Primary C at Site 2 (ignored when colocateSql=true)"
       }
     },
     "vmNameCas": {
@@ -496,7 +467,7 @@
       "apiVersion": "2024-03-01",
       "name": "[variables('rgSite2')]",
       "location": "[parameters('location')]",
-      "tags": "[union(variables('commonTags'), createObject('workload', 'site2-aoag'))]"
+      "tags": "[union(variables('commonTags'), createObject('workload', 'site2'))]"
     },
     {
       "type": "Microsoft.Resources/deployments",
@@ -669,7 +640,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15117879865448703131"
+              "templateHash": "17429541438654052061"
             }
           },
           "parameters": {
@@ -724,7 +695,7 @@
               "type": "string",
               "defaultValue": "10.0.40.0/24",
               "metadata": {
-                "description": "Site 2 subnet CIDR (PrimC, SQL-PrimC AOAG, ILB)"
+                "description": "Site 2 subnet CIDR (PrimC, SQL-PrimC)"
               }
             },
             "tags": {
@@ -1003,45 +974,6 @@
                       "sourcePortRange": "*",
                       "destinationAddressPrefix": "VirtualNetwork",
                       "destinationPortRange": "*"
-                    }
-                  },
-                  {
-                    "name": "Allow-SQL-AOAG",
-                    "properties": {
-                      "priority": 300,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "[parameters('snetSite2Prefix')]",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "[parameters('snetSite2Prefix')]",
-                      "destinationPortRange": "1433"
-                    }
-                  },
-                  {
-                    "name": "Allow-AOAG-Endpoint",
-                    "properties": {
-                      "priority": 310,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "[parameters('snetSite2Prefix')]",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "[parameters('snetSite2Prefix')]",
-                      "destinationPortRange": "5022"
-                    }
-                  },
-                  {
-                    "name": "Allow-ILB-Probe",
-                    "properties": {
-                      "priority": 320,
-                      "direction": "Inbound",
-                      "access": "Allow",
-                      "protocol": "Tcp",
-                      "sourceAddressPrefix": "AzureLoadBalancer",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "*",
-                      "destinationPortRange": "59999"
                     }
                   },
                   {
@@ -1809,401 +1741,6 @@
       },
       "dependsOn": [
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-keyvault')]",
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNetwork'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
-      ]
-    },
-    {
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "deploy-cloud-witness",
-      "resourceGroup": "[variables('rgIdentity')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "namePrefix": {
-            "value": "stgcw"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "skuName": {
-            "value": "Standard_LRS"
-          },
-          "shareName": {
-            "value": "witness"
-          },
-          "shareQuotaGiB": {
-            "value": 5
-          },
-          "tags": {
-            "value": "[union(variables('commonTags'), createObject('workload', 'file-share-witness'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.45.15.27210",
-              "templateHash": "13462998111069263162"
-            }
-          },
-          "parameters": {
-            "namePrefix": {
-              "type": "string",
-              "metadata": {
-                "description": "Prefix for the storage account name (will be combined with uniqueString)"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region for deployment"
-              }
-            },
-            "skuName": {
-              "type": "string",
-              "defaultValue": "Standard_LRS",
-              "allowedValues": [
-                "Standard_LRS",
-                "Standard_GRS",
-                "Standard_ZRS"
-              ],
-              "metadata": {
-                "description": "Storage account SKU"
-              }
-            },
-            "shareName": {
-              "type": "string",
-              "defaultValue": "witness",
-              "metadata": {
-                "description": "Name of the Azure Files share"
-              }
-            },
-            "shareQuotaGiB": {
-              "type": "int",
-              "defaultValue": 5,
-              "metadata": {
-                "description": "Share quota in GiB"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags to apply"
-              }
-            },
-            "enableADDS": {
-              "type": "bool",
-              "defaultValue": false,
-              "metadata": {
-                "description": "Enable on-premises AD DS authentication for SMB file shares"
-              }
-            },
-            "adDomainName": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "AD domain FQDN (e.g., azlab.local)"
-              }
-            },
-            "adNetBiosDomainName": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "AD NetBIOS domain name (e.g., AZLAB)"
-              }
-            },
-            "adForestName": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "AD forest name (e.g., azlab.local)"
-              }
-            },
-            "adDomainGuid": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "AD domain GUID"
-              }
-            },
-            "adDomainSid": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "AD domain SID (e.g., S-1-5-21-...)"
-              }
-            },
-            "adAzureStorageSid": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "SID of the computer account created in AD for this storage account"
-              }
-            }
-          },
-          "variables": {
-            "uniqueSuffix": "[uniqueString(resourceGroup().id, parameters('namePrefix'))]",
-            "rawName": "[toLower(format('{0}{1}', parameters('namePrefix'), variables('uniqueSuffix')))]",
-            "storageAccountName": "[if(greater(length(variables('rawName')), 24), substring(variables('rawName'), 0, 24), variables('rawName'))]"
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Storage/storageAccounts",
-              "apiVersion": "2023-05-01",
-              "name": "[variables('storageAccountName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "kind": "StorageV2",
-              "sku": {
-                "name": "[parameters('skuName')]"
-              },
-              "properties": {
-                "supportsHttpsTrafficOnly": true,
-                "minimumTlsVersion": "TLS1_2",
-                "allowBlobPublicAccess": false,
-                "allowSharedKeyAccess": false,
-                "defaultToOAuthAuthentication": true,
-                "publicNetworkAccess": "Disabled",
-                "networkAcls": {
-                  "defaultAction": "Deny",
-                  "bypass": "AzureServices"
-                },
-                "azureFilesIdentityBasedAuthentication": "[if(parameters('enableADDS'), createObject('directoryServiceOptions', 'AD', 'activeDirectoryProperties', createObject('domainName', parameters('adDomainName'), 'netBiosDomainName', parameters('adNetBiosDomainName'), 'forestName', parameters('adForestName'), 'domainGuid', parameters('adDomainGuid'), 'domainSid', parameters('adDomainSid'), 'azureStorageSid', parameters('adAzureStorageSid')), 'defaultSharePermission', 'StorageFileDataSmbShareContributor'), null())]"
-              }
-            },
-            {
-              "type": "Microsoft.Storage/storageAccounts/fileServices",
-              "apiVersion": "2023-05-01",
-              "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
-              "properties": {
-                "protocolSettings": {
-                  "smb": {
-                    "kerberosTicketEncryption": "AES-256"
-                  }
-                }
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
-              ]
-            },
-            {
-              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
-              "apiVersion": "2023-05-01",
-              "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', parameters('shareName'))]",
-              "properties": {
-                "shareQuota": "[parameters('shareQuotaGiB')]",
-                "enabledProtocols": "SMB"
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', variables('storageAccountName'), 'default')]"
-              ]
-            }
-          ],
-          "outputs": {
-            "storageAccountName": {
-              "type": "string",
-              "value": "[variables('storageAccountName')]"
-            },
-            "storageAccountId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
-            },
-            "fileShareName": {
-              "type": "string",
-              "value": "[parameters('shareName')]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgIdentity'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "deploy-cloud-witness-pe",
-      "resourceGroup": "[variables('rgNetwork')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "storageAccountId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.storageAccountId.value]"
-          },
-          "storageAccountName": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.storageAccountName.value]"
-          },
-          "subnetId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.snetPeId.value]"
-          },
-          "vnetId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.vnetId.value]"
-          },
-          "existingPrivateDnsZoneId": {
-            "value": "[parameters('existingFileDnsZoneId')]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "tags": {
-            "value": "[union(variables('commonTags'), createObject('workload', 'file-share-witness'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.45.15.27210",
-              "templateHash": "13592417454862450934"
-            }
-          },
-          "parameters": {
-            "storageAccountId": {
-              "type": "string",
-              "metadata": {
-                "description": "Resource ID of the storage account"
-              }
-            },
-            "storageAccountName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the storage account (used for PE naming)"
-              }
-            },
-            "subnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "Subnet resource ID for the private endpoint"
-              }
-            },
-            "vnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "VNet resource ID to link the private DNS zone to"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags"
-              }
-            },
-            "existingPrivateDnsZoneId": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Resource ID of an existing privatelink.file DNS zone. When provided, the module skips DNS zone and VNet link creation and registers the PE in the existing zone."
-              }
-            }
-          },
-          "variables": {
-            "privateDnsZoneName": "[format('privatelink.file.{0}', environment().suffixes.storage)]",
-            "createDnsZone": "[empty(parameters('existingPrivateDnsZoneId'))]",
-            "effectiveDnsZoneId": "[if(variables('createDnsZone'), resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName')), parameters('existingPrivateDnsZoneId'))]"
-          },
-          "resources": [
-            {
-              "condition": "[variables('createDnsZone')]",
-              "type": "Microsoft.Network/privateDnsZones",
-              "apiVersion": "2024-06-01",
-              "name": "[variables('privateDnsZoneName')]",
-              "location": "global",
-              "tags": "[parameters('tags')]"
-            },
-            {
-              "condition": "[variables('createDnsZone')]",
-              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
-              "apiVersion": "2024-06-01",
-              "name": "[format('{0}/{1}', variables('privateDnsZoneName'), format('{0}-vnet-link', parameters('storageAccountName')))]",
-              "location": "global",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "virtualNetwork": {
-                  "id": "[parameters('vnetId')]"
-                },
-                "registrationEnabled": false
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
-              ]
-            },
-            {
-              "type": "Microsoft.Network/privateEndpoints",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}-pe-file', parameters('storageAccountName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "subnet": {
-                  "id": "[parameters('subnetId')]"
-                },
-                "privateLinkServiceConnections": [
-                  {
-                    "name": "[format('{0}-plsc-file', parameters('storageAccountName'))]",
-                    "properties": {
-                      "privateLinkServiceId": "[parameters('storageAccountId')]",
-                      "groupIds": [
-                        "file"
-                      ]
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
-              "apiVersion": "2023-11-01",
-              "name": "[format('{0}/{1}', format('{0}-pe-file', parameters('storageAccountName')), 'default')]",
-              "properties": {
-                "privateDnsZoneConfigs": [
-                  {
-                    "name": "privatelink-file",
-                    "properties": {
-                      "privateDnsZoneId": "[variables('effectiveDnsZoneId')]"
-                    }
-                  }
-                ]
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]",
-                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName')))]"
-              ]
-            }
-          ],
-          "outputs": {
-            "privateEndpointId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe-file', parameters('storageAccountName')))]"
-            },
-            "dnsZoneId": {
-              "type": "string",
-              "value": "[variables('effectiveDnsZoneId')]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgNetwork'))]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
       ]
@@ -5646,309 +5183,6 @@
       ]
     },
     {
-      "condition": "[greaterOrEquals(parameters('deploymentTier'), 2)]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "deploy-avset-sql-site2",
-      "resourceGroup": "[variables('rgSite2')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "name": {
-            "value": "[format('{0}-avset-sql-site2', parameters('baseName'))]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "faultDomainCount": {
-            "value": 2
-          },
-          "updateDomainCount": {
-            "value": 5
-          },
-          "tags": {
-            "value": "[union(variables('commonTags'), createObject('workload', 'sql-aoag'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.45.15.27210",
-              "templateHash": "12966573723282883578"
-            }
-          },
-          "parameters": {
-            "name": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the availability set"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region for deployment"
-              }
-            },
-            "faultDomainCount": {
-              "type": "int",
-              "defaultValue": 2,
-              "minValue": 1,
-              "maxValue": 3,
-              "metadata": {
-                "description": "Number of fault domains"
-              }
-            },
-            "updateDomainCount": {
-              "type": "int",
-              "defaultValue": 5,
-              "minValue": 1,
-              "maxValue": 20,
-              "metadata": {
-                "description": "Number of update domains"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags to apply"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Compute/availabilitySets",
-              "apiVersion": "2024-03-01",
-              "name": "[parameters('name')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "Aligned"
-              },
-              "properties": {
-                "platformFaultDomainCount": "[parameters('faultDomainCount')]",
-                "platformUpdateDomainCount": "[parameters('updateDomainCount')]"
-              }
-            }
-          ],
-          "outputs": {
-            "availabilitySetId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Compute/availabilitySets', parameters('name'))]"
-            },
-            "availabilitySetName": {
-              "type": "string",
-              "value": "[parameters('name')]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]"
-      ]
-    },
-    {
-      "condition": "[greaterOrEquals(parameters('deploymentTier'), 2)]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "deploy-ilb-aoag",
-      "resourceGroup": "[variables('rgSite2')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "lbName": {
-            "value": "[format('{0}-ilb-aoag', parameters('baseName'))]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "subnetId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.snetSite2Id.value]"
-          },
-          "frontendIp": {
-            "value": "[parameters('aoagListenerIp')]"
-          },
-          "tags": {
-            "value": "[union(variables('commonTags'), createObject('workload', 'sql-aoag'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.45.15.27210",
-              "templateHash": "538640505457493020"
-            }
-          },
-          "parameters": {
-            "lbName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the load balancer"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region for deployment"
-              }
-            },
-            "subnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "Resource ID of the subnet for the frontend IP"
-              }
-            },
-            "frontendIp": {
-              "type": "string",
-              "metadata": {
-                "description": "Static private IP address for the AOAG listener (frontend)"
-              }
-            },
-            "probePort": {
-              "type": "int",
-              "defaultValue": 59999,
-              "metadata": {
-                "description": "TCP port for the health probe"
-              }
-            },
-            "lbPort": {
-              "type": "int",
-              "defaultValue": 1433,
-              "metadata": {
-                "description": "SQL listener port (frontend and backend)"
-              }
-            },
-            "probeIntervalSeconds": {
-              "type": "int",
-              "defaultValue": 5,
-              "metadata": {
-                "description": "Health probe interval in seconds"
-              }
-            },
-            "probeNumberOfProbes": {
-              "type": "int",
-              "defaultValue": 2,
-              "metadata": {
-                "description": "Number of consecutive probe failures before marking unhealthy"
-              }
-            },
-            "idleTimeoutMinutes": {
-              "type": "int",
-              "defaultValue": 30,
-              "metadata": {
-                "description": "Idle timeout in minutes for the LB rule"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags to apply to all resources"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Network/loadBalancers",
-              "apiVersion": "2023-11-01",
-              "name": "[parameters('lbName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "Standard"
-              },
-              "properties": {
-                "frontendIPConfigurations": [
-                  {
-                    "name": "fe-listener",
-                    "properties": {
-                      "privateIPAllocationMethod": "Static",
-                      "privateIPAddress": "[parameters('frontendIp')]",
-                      "subnet": {
-                        "id": "[parameters('subnetId')]"
-                      }
-                    }
-                  }
-                ],
-                "backendAddressPools": [
-                  {
-                    "name": "be-sqlnodes"
-                  }
-                ],
-                "probes": [
-                  {
-                    "name": "hp-aoag",
-                    "properties": {
-                      "protocol": "Tcp",
-                      "port": "[parameters('probePort')]",
-                      "intervalInSeconds": "[parameters('probeIntervalSeconds')]",
-                      "numberOfProbes": "[parameters('probeNumberOfProbes')]"
-                    }
-                  }
-                ],
-                "loadBalancingRules": [
-                  {
-                    "name": "[format('lbr-aoag-{0}', parameters('lbPort'))]",
-                    "properties": {
-                      "frontendIPConfiguration": {
-                        "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', parameters('lbName'), 'fe-listener')]"
-                      },
-                      "backendAddressPool": {
-                        "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', parameters('lbName'), 'be-sqlnodes')]"
-                      },
-                      "probe": {
-                        "id": "[resourceId('Microsoft.Network/loadBalancers/probes', parameters('lbName'), 'hp-aoag')]"
-                      },
-                      "protocol": "Tcp",
-                      "frontendPort": "[parameters('lbPort')]",
-                      "backendPort": "[parameters('lbPort')]",
-                      "enableFloatingIP": true,
-                      "idleTimeoutInMinutes": "[parameters('idleTimeoutMinutes')]"
-                    }
-                  }
-                ]
-              }
-            }
-          ],
-          "outputs": {
-            "lbId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Network/loadBalancers', parameters('lbName'))]"
-            },
-            "lbName": {
-              "type": "string",
-              "value": "[parameters('lbName')]"
-            },
-            "backendPoolId": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.Network/loadBalancers', parameters('lbName')), '2023-11-01').backendAddressPools[0].id]"
-            },
-            "frontendIpConfigId": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.Network/loadBalancers', parameters('lbName')), '2023-11-01').frontendIPConfigurations[0].id]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
-      ]
-    },
-    {
       "condition": "[and(greaterOrEquals(parameters('deploymentTier'), 2), not(parameters('colocateSql')))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
@@ -7047,10 +6281,10 @@
       ]
     },
     {
-      "condition": "[greaterOrEquals(parameters('deploymentTier'), 2)]",
+      "condition": "[and(greaterOrEquals(parameters('deploymentTier'), 2), not(parameters('colocateSql')))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "deploy-sql-primc01",
+      "name": "deploy-sql-primc",
       "resourceGroup": "[variables('rgSite2')]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -7059,13 +6293,13 @@
         "mode": "Incremental",
         "parameters": {
           "vmName": {
-            "value": "[parameters('vmNameSqlAoag1')]"
+            "value": "[parameters('vmNameSqlPrimC')]"
           },
           "location": {
             "value": "[parameters('location')]"
           },
           "vmSize": {
-            "value": "[parameters('sizeSQLAoag')]"
+            "value": "[parameters('sizeSQL')]"
           },
           "subnetId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.snetSite2Id.value]"
@@ -7094,12 +6328,6 @@
           "dataDiskSku": {
             "value": "Premium_LRS"
           },
-          "availabilitySetId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-avset-sql-site2'), '2025-04-01').outputs.availabilitySetId.value]"
-          },
-          "loadBalancerBackendPoolId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-ilb-aoag'), '2025-04-01').outputs.backendPoolId.value]"
-          },
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
@@ -7110,7 +6338,7 @@
             ]
           },
           "tags": {
-            "value": "[union(variables('commonTags'), createObject('role', 'sql-server-aoag', 'site', 'site2', 'aoagNode', '1'))]"
+            "value": "[union(variables('commonTags'), createObject('role', 'sql-server', 'site', 'site2'))]"
           }
         },
         "template": {
@@ -7414,382 +6642,6 @@
         }
       },
       "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-avset-sql-site2')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-ilb-aoag')]",
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
-      ]
-    },
-    {
-      "condition": "[greaterOrEquals(parameters('deploymentTier'), 2)]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "deploy-sql-primc02",
-      "resourceGroup": "[variables('rgSite2')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "vmName": {
-            "value": "[parameters('vmNameSqlAoag2')]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "vmSize": {
-            "value": "[parameters('sizeSQLAoag')]"
-          },
-          "subnetId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.snetSite2Id.value]"
-          },
-          "adminUsername": {
-            "value": "[parameters('adminUsername')]"
-          },
-          "adminPassword": {
-            "value": "[parameters('adminPassword')]"
-          },
-          "imagePublisher": {
-            "value": "[parameters('imagePublisher')]"
-          },
-          "imageOffer": {
-            "value": "[parameters('imageOffer')]"
-          },
-          "imageSku": {
-            "value": "[parameters('imageSku')]"
-          },
-          "dataDiskCount": {
-            "value": 2
-          },
-          "dataDiskSizeGb": {
-            "value": 128
-          },
-          "dataDiskSku": {
-            "value": "Premium_LRS"
-          },
-          "availabilitySetId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-avset-sql-site2'), '2025-04-01').outputs.availabilitySetId.value]"
-          },
-          "loadBalancerBackendPoolId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-ilb-aoag'), '2025-04-01').outputs.backendPoolId.value]"
-          },
-          "osDiskSku": {
-            "value": "[parameters('osDiskSku')]"
-          },
-          "dnsServers": {
-            "value": [
-              "[parameters('dcSite2Ip')]",
-              "[parameters('dc01Ip')]"
-            ]
-          },
-          "tags": {
-            "value": "[union(variables('commonTags'), createObject('role', 'sql-server-aoag', 'site', 'site2', 'aoagNode', '2'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.45.15.27210",
-              "templateHash": "5958427330352843093"
-            }
-          },
-          "parameters": {
-            "vmName": {
-              "type": "string",
-              "maxLength": 15,
-              "metadata": {
-                "description": "Name of the virtual machine (also used as computer name)"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region for deployment"
-              }
-            },
-            "vmSize": {
-              "type": "string",
-              "metadata": {
-                "description": "VM size SKU"
-              }
-            },
-            "subnetId": {
-              "type": "string",
-              "metadata": {
-                "description": "Resource ID of the subnet for the NIC"
-              }
-            },
-            "adminUsername": {
-              "type": "string",
-              "metadata": {
-                "description": "Local admin username"
-              }
-            },
-            "adminPassword": {
-              "type": "securestring",
-              "metadata": {
-                "description": "Local admin password"
-              }
-            },
-            "imagePublisher": {
-              "type": "string",
-              "defaultValue": "MicrosoftWindowsServer",
-              "metadata": {
-                "description": "OS image publisher"
-              }
-            },
-            "imageOffer": {
-              "type": "string",
-              "defaultValue": "WindowsServer",
-              "metadata": {
-                "description": "OS image offer"
-              }
-            },
-            "imageSku": {
-              "type": "string",
-              "defaultValue": "2025-datacenter-g2",
-              "allowedValues": [
-                "2022-datacenter-g2",
-                "2025-datacenter-g2"
-              ],
-              "metadata": {
-                "description": "OS image SKU. Minimum supported is Server 2022; default is Server 2025 (Gen2)."
-              }
-            },
-            "imageVersion": {
-              "type": "string",
-              "defaultValue": "latest",
-              "metadata": {
-                "description": "OS image version"
-              }
-            },
-            "privateIpAddress": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Optional static private IP address. Leave empty for dynamic allocation."
-              }
-            },
-            "dataDiskCount": {
-              "type": "int",
-              "defaultValue": 0,
-              "minValue": 0,
-              "maxValue": 4,
-              "metadata": {
-                "description": "Number of data disks to attach (each 128 GB Premium SSD)"
-              }
-            },
-            "dataDiskSizeGb": {
-              "type": "int",
-              "defaultValue": 128,
-              "metadata": {
-                "description": "Size of each data disk in GB"
-              }
-            },
-            "dataDiskSku": {
-              "type": "string",
-              "defaultValue": "Premium_LRS",
-              "allowedValues": [
-                "Premium_LRS",
-                "StandardSSD_LRS",
-                "Standard_LRS"
-              ],
-              "metadata": {
-                "description": "Storage type for data disks"
-              }
-            },
-            "osDiskSku": {
-              "type": "string",
-              "defaultValue": "Premium_LRS",
-              "allowedValues": [
-                "Premium_LRS",
-                "StandardSSD_LRS",
-                "Standard_LRS"
-              ],
-              "metadata": {
-                "description": "Storage type for the OS disk"
-              }
-            },
-            "availabilitySetId": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Optional: Availability Set resource ID"
-              }
-            },
-            "loadBalancerBackendPoolId": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Optional: Load Balancer backend address pool resource ID (for ILB association)"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags to apply to all resources"
-              }
-            },
-            "dnsServers": {
-              "type": "array",
-              "defaultValue": [],
-              "metadata": {
-                "description": "DNS server IP addresses for the NIC. Overrides VNet-level DNS for this VM. Leave empty to inherit VNet DNS (default). For DCs, set to [selfIp, fallbackDcIp] so each DC uses itself as primary DNS — required for reliable AD replication and GPO delivery."
-              }
-            }
-          },
-          "variables": {
-            "copy": [
-              {
-                "name": "dataDisks",
-                "count": "[length(range(0, parameters('dataDiskCount')))]",
-                "input": {
-                  "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')])]",
-                  "lun": "[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]",
-                  "createOption": "Attach",
-                  "managedDisk": {
-                    "id": "[resourceId('Microsoft.Compute/disks', format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')]]))]",
-                    "storageAccountType": "[parameters('dataDiskSku')]"
-                  },
-                  "caching": "[if(equals(range(0, parameters('dataDiskCount'))[copyIndex('dataDisks')], 0), 'ReadOnly', 'None')]"
-                }
-              }
-            ],
-            "nicName": "[format('{0}-nic', parameters('vmName'))]",
-            "useStaticIp": "[not(empty(parameters('privateIpAddress')))]",
-            "useLb": "[not(empty(parameters('loadBalancerBackendPoolId')))]"
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Network/networkInterfaces",
-              "apiVersion": "2023-11-01",
-              "name": "[variables('nicName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "ipConfigurations": [
-                  {
-                    "name": "ipconfig1",
-                    "properties": {
-                      "privateIPAllocationMethod": "[if(variables('useStaticIp'), 'Static', 'Dynamic')]",
-                      "privateIPAddress": "[if(variables('useStaticIp'), parameters('privateIpAddress'), null())]",
-                      "subnet": {
-                        "id": "[parameters('subnetId')]"
-                      },
-                      "loadBalancerBackendAddressPools": "[if(variables('useLb'), createArray(createObject('id', parameters('loadBalancerBackendPoolId'))), createArray())]"
-                    }
-                  }
-                ],
-                "dnsSettings": {
-                  "dnsServers": "[parameters('dnsServers')]"
-                }
-              }
-            },
-            {
-              "copy": {
-                "name": "dataDisksRes",
-                "count": "[length(range(0, parameters('dataDiskCount')))]"
-              },
-              "type": "Microsoft.Compute/disks",
-              "apiVersion": "2024-03-02",
-              "name": "[format('{0}-datadisk-{1}', parameters('vmName'), range(0, parameters('dataDiskCount'))[copyIndex()])]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "[parameters('dataDiskSku')]"
-              },
-              "properties": {
-                "diskSizeGB": "[parameters('dataDiskSizeGb')]",
-                "creationData": {
-                  "createOption": "Empty"
-                }
-              }
-            },
-            {
-              "type": "Microsoft.Compute/virtualMachines",
-              "apiVersion": "2024-03-01",
-              "name": "[parameters('vmName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "hardwareProfile": {
-                  "vmSize": "[parameters('vmSize')]"
-                },
-                "availabilitySet": "[if(not(empty(parameters('availabilitySetId'))), createObject('id', parameters('availabilitySetId')), null())]",
-                "osProfile": {
-                  "computerName": "[parameters('vmName')]",
-                  "adminUsername": "[parameters('adminUsername')]",
-                  "adminPassword": "[parameters('adminPassword')]",
-                  "windowsConfiguration": {
-                    "provisionVMAgent": true,
-                    "enableAutomaticUpdates": true
-                  }
-                },
-                "storageProfile": {
-                  "imageReference": {
-                    "publisher": "[parameters('imagePublisher')]",
-                    "offer": "[parameters('imageOffer')]",
-                    "sku": "[parameters('imageSku')]",
-                    "version": "[parameters('imageVersion')]"
-                  },
-                  "osDisk": {
-                    "name": "[format('{0}-osdisk', parameters('vmName'))]",
-                    "createOption": "FromImage",
-                    "managedDisk": {
-                      "storageAccountType": "[parameters('osDiskSku')]"
-                    },
-                    "caching": "ReadWrite",
-                    "diskSizeGB": 128
-                  },
-                  "dataDisks": "[variables('dataDisks')]"
-                },
-                "networkProfile": {
-                  "networkInterfaces": [
-                    {
-                      "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
-                    }
-                  ]
-                },
-                "diagnosticsProfile": {
-                  "bootDiagnostics": {
-                    "enabled": true
-                  }
-                }
-              },
-              "dependsOn": [
-                "dataDisksRes",
-                "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
-              ]
-            }
-          ],
-          "outputs": {
-            "vmId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
-            },
-            "vmName": {
-              "type": "string",
-              "value": "[parameters('vmName')]"
-            },
-            "nicId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
-            },
-            "privateIpAddress": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', variables('nicName')), '2023-11-01').ipConfigurations[0].properties.privateIPAddress]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-avset-sql-site2')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-ilb-aoag')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-vnet')]"
       ]
@@ -8263,10 +7115,10 @@
       ]
     },
     {
-      "condition": "[and(greaterOrEquals(parameters('deploymentTier'), 2), parameters('joinDomain'))]",
+      "condition": "[and(and(greaterOrEquals(parameters('deploymentTier'), 2), not(parameters('colocateSql'))), parameters('joinDomain'))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "deploy-dj-sql-aoag1",
+      "name": "deploy-dj-sql-primc",
       "resourceGroup": "[variables('rgSite2')]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -8275,7 +7127,7 @@
         "mode": "Incremental",
         "parameters": {
           "vmName": {
-            "value": "[parameters('vmNameSqlAoag1')]"
+            "value": "[parameters('vmNameSqlPrimC')]"
           },
           "location": {
             "value": "[parameters('location')]"
@@ -8415,163 +7267,7 @@
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-configure-ad')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc02')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-sql-primc01')]"
-      ]
-    },
-    {
-      "condition": "[and(greaterOrEquals(parameters('deploymentTier'), 2), parameters('joinDomain'))]",
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "deploy-dj-sql-aoag2",
-      "resourceGroup": "[variables('rgSite2')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "vmName": {
-            "value": "[parameters('vmNameSqlAoag2')]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "domainName": {
-            "value": "[parameters('domainName')]"
-          },
-          "domainJoinUser": {
-            "value": "[variables('domainJoinUser')]"
-          },
-          "domainJoinPassword": {
-            "value": "[parameters('adminPassword')]"
-          },
-          "ouPath": {
-            "value": "[format('OU=SQL Servers,OU=Lab Servers,{0}', variables('domainDN'))]"
-          },
-          "tags": {
-            "value": "[union(variables('commonTags'), createObject('role', 'domain-join'))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.45.15.27210",
-              "templateHash": "11768468912552602781"
-            }
-          },
-          "parameters": {
-            "vmName": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the existing VM to domain-join"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region"
-              }
-            },
-            "domainName": {
-              "type": "string",
-              "metadata": {
-                "description": "Fully qualified domain name (e.g., azlab.local)"
-              }
-            },
-            "domainJoinUser": {
-              "type": "string",
-              "metadata": {
-                "description": "UPN or DOMAIN\\user with permission to join machines to the domain"
-              }
-            },
-            "domainJoinPassword": {
-              "type": "securestring",
-              "metadata": {
-                "description": "Password for the domain join account"
-              }
-            },
-            "ouPath": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Optional OU path for the computer object (e.g., OU=SQL Servers,OU=Lab Servers,DC=azlab,DC=local). Leave empty for default Computers container."
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Tags"
-              }
-            }
-          },
-          "variables": {
-            "domainJoinOptions": 3
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Compute/virtualMachines/runCommands",
-              "apiVersion": "2024-03-01",
-              "name": "[format('{0}/DnsReadyCheck', parameters('vmName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "asyncExecution": false,
-                "timeoutInSeconds": 600,
-                "source": {
-                  "script": "        param([string]$DomainName)\r\n\r\n        $srvTarget = \"_ldap._tcp.dc._msdcs.$DomainName\"\r\n        $maxAttempts = 30\r\n        $sleepSec    = 10\r\n\r\n        Write-Output \"Validating DNS resolution for domain: $DomainName\"\r\n        Write-Output \"Looking up SRV record: $srvTarget\"\r\n\r\n        for ($i = 1; $i -le $maxAttempts; $i++) {\r\n            Clear-DnsClientCache\r\n            $srv = Resolve-DnsName -Name $srvTarget -Type SRV -ErrorAction SilentlyContinue\r\n            if ($srv) {\r\n                Write-Output \"DNS ready on attempt $i -- found DC: $($srv[0].NameTarget)\"\r\n                exit 0\r\n            }\r\n            Write-Output \"Attempt $i/${maxAttempts}: no response yet, retrying in ${sleepSec}s...\"\r\n            Start-Sleep -Seconds $sleepSec\r\n        }\r\n\r\n        throw \"DNS resolution for $DomainName failed after $maxAttempts attempts ($($maxAttempts * $sleepSec) seconds). SRV target: $srvTarget\"\r\n      "
-                },
-                "parameters": [
-                  {
-                    "name": "DomainName",
-                    "value": "[parameters('domainName')]"
-                  }
-                ]
-              }
-            },
-            {
-              "type": "Microsoft.Compute/virtualMachines/extensions",
-              "apiVersion": "2024-03-01",
-              "name": "[format('{0}/JoinDomain', parameters('vmName'))]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "publisher": "Microsoft.Compute",
-                "type": "JsonADDomainExtension",
-                "typeHandlerVersion": "1.3",
-                "autoUpgradeMinorVersion": true,
-                "settings": {
-                  "Name": "[parameters('domainName')]",
-                  "OUPath": "[parameters('ouPath')]",
-                  "User": "[parameters('domainJoinUser')]",
-                  "Restart": "true",
-                  "Options": "[variables('domainJoinOptions')]"
-                },
-                "protectedSettings": {
-                  "Password": "[parameters('domainJoinPassword')]"
-                }
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Compute/virtualMachines/runCommands', split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[0], split(format('{0}/DnsReadyCheck', parameters('vmName')), '/')[1])]"
-              ]
-            }
-          ],
-          "outputs": {
-            "extensionId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.Compute/virtualMachines/extensions', split(format('{0}/JoinDomain', parameters('vmName')), '/')[0], split(format('{0}/JoinDomain', parameters('vmName')), '/')[1])]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-configure-ad')]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-promote-dc02')]",
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('rgSite2'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-sql-primc02')]"
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgSite2')), 'Microsoft.Resources/deployments', 'deploy-sql-primc')]"
       ]
     },
     {
@@ -9693,6 +8389,9 @@
           "imageSku": {
             "value": "[parameters('imageSku')]"
           },
+          "dataDiskCount": "[if(parameters('colocateSql'), createObject('value', 2), createObject('value', 0))]",
+          "dataDiskSizeGb": "[if(parameters('colocateSql'), createObject('value', 128), createObject('value', 0))]",
+          "dataDiskSku": "[if(parameters('colocateSql'), createObject('value', 'Premium_LRS'), createObject('value', 'Standard_LRS'))]",
           "osDiskSku": {
             "value": "[parameters('osDiskSku')]"
           },
@@ -9703,7 +8402,7 @@
             ]
           },
           "tags": {
-            "value": "[union(variables('commonTags'), createObject('role', 'child-primary', 'site', 'site2'))]"
+            "value": "[union(variables('commonTags'), createObject('role', if(parameters('colocateSql'), 'child-primary-sql', 'child-primary'), 'site', 'site2'))]"
           }
         },
         "template": {
@@ -10654,14 +9353,6 @@
     "bastionName": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgNetwork')), 'Microsoft.Resources/deployments', 'deploy-bastion'), '2025-04-01').outputs.bastionName.value]"
-    },
-    "cloudWitnessStorageAccount": {
-      "type": "string",
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.storageAccountName.value]"
-    },
-    "cloudWitnessFileShareName": {
-      "type": "string",
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('rgIdentity')), 'Microsoft.Resources/deployments', 'deploy-cloud-witness'), '2025-04-01').outputs.fileShareName.value]"
     },
     "keyVaultName": {
       "type": "string",

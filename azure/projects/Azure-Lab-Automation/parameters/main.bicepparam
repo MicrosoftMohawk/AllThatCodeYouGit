@@ -33,8 +33,8 @@ param adminPassword = ''
 param domainName = 'azlab.local'
 
 // --- Deployment Tier ---------------------------------------------------------
-// 1 = Core networking + AD (DCs, Bastion, Cloud Witness)
-// 2 = + SQL Server VMs (5 VMs including AOAG at Site 2)
+// 1 = Core networking + AD (DCs, Bastion)
+// 2 = + SQL Server VMs (4 VMs: CAS, PrimA, PrimB, PrimC)
 // 3 = + Application VMs (CAS + 3 child primaries) — Full lab
 param deploymentTier = 3
 
@@ -49,14 +49,13 @@ param deploymentTier = 3
 // param entraConnectPlacement = 'dedicated'    // 'dedicated' or 'dc02'
 // param vmNameMgmt = 'azlab-mgmt'
 // param vmNameEntraConnect = 'azlab-aadcs'
-// param sizeManagement = 'Standard_D2s_v5'
+// param sizeManagement = 'Standard_D2s_v6'
 
 // param adminUsername = 'labadmin'
 
-// param sizeDC = 'Standard_D2s_v5'
-// param sizeApp = 'Standard_D4s_v5'
-// param sizeSQL = 'Standard_D4s_v5'
-// param sizeSQLAoag = 'Standard_D8s_v5'
+// param sizeDC = 'Standard_D2s_v6'
+// param sizeApp = 'Standard_D4s_v6'
+// param sizeSQL = 'Standard_D4s_v6'
 
 // param vnetAddressPrefix = '10.0.0.0/16'
 // param snetBastionPrefix = '10.0.0.0/26'
@@ -70,7 +69,6 @@ param deploymentTier = 3
 // param dcMainIp = '10.0.20.250'
 // param dcSite1Ip = '10.0.30.250'
 // param dcSite2Ip = '10.0.40.250'
-// param aoagListenerIp = '10.0.40.10'
 
 // param vmNameDcMain = 'azlab-dc03'
 // param vmNameDcSite1 = 'azlab-dc04'

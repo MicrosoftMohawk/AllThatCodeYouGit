@@ -31,7 +31,7 @@
     OS image version: 2022 or 2025. If omitted, an interactive prompt is shown.
 
 .PARAMETER VmSize
-    VM size SKU. Default: Standard_D2s_v5.
+    VM size SKU. Default: Standard_B2as_v2.
 
 .PARAMETER AdminPassword
     VM local admin password. If omitted, retrieves from Key Vault.

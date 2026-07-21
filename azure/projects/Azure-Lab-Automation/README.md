@@ -1,6 +1,6 @@
 # Azure Global Lab — Bicep Deployment
 
-Automated infrastructure-as-code deployment for a **modular Azure lab** environment. Deploys a multi-tier hierarchy with a Central Administration Site (CAS), 3 child primary sites across multiple subnets simulating global site dispersion, SQL Server infrastructure including an Always On Availability Group (AOAG), Active Directory domain controllers with AD Sites and Services configuration, and a Point-to-Site VPN Gateway for remote connectivity. Designed to expand with additional workload modules over time.
+Automated infrastructure-as-code deployment for a **modular Azure lab** environment. Deploys a multi-tier hierarchy with a Central Administration Site (CAS), 3 child primary sites across multiple subnets simulating global site dispersion, SQL Server infrastructure (one SQL Server VM per site), Active Directory domain controllers with AD Sites and Services configuration, and a Point-to-Site VPN Gateway for remote connectivity. Designed to expand with additional workload modules over time.
 
 ---
 
@@ -38,10 +38,8 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 │  └──────────────────────────────────────────────────────────────────────┘│
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────────┐│
-│  │ snet-site2 (10.0.40.0/24)  — Remote Site 2 (AOAG)                  ││
-│  │   DC05 (10.0.40.250)  PrimaryC  SQL-PrimC01 ──┐                     ││
-│  │                               SQL-PrimC02 ──┤ AOAG + ILB (10.0.40.10)││
-│  │                                              │ File Share Witness    ││
+│  │ snet-site2 (10.0.40.0/24)  — Remote Site 2                         ││
+│  │   DC05 (10.0.40.250)  PrimaryC        SQL-PrimC                     ││
 │  └──────────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -50,56 +48,53 @@ Automated infrastructure-as-code deployment for a **modular Azure lab** environm
 
 ### VM Inventory
 
-The lab deploys up to **14 VMs** (or fewer with `colocateSql`), plus up to **2 additional VMs** when Entra ID integration is enabled.
+The lab deploys up to **13 VMs** (or fewer with `colocateSql`), plus up to **2 additional VMs** when Entra ID integration is enabled.
 All MCM and SQL VM names are **customizable** at deploy time via an interactive naming prompt or Bicep parameters.
 
-#### Default Layout — Separate SQL (14 VMs)
+#### Default Layout — Separate SQL (13 VMs)
 
 | Default Name | Role | Size | Subnet | Tier |
 |--------------|------|------|--------|------|
-| `{base}-dc01` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
-| `{base}-dc02` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
-| `{base}-dc03` | Domain Controller (Main) | Standard_D2s_v5 | snet-main | 1 |
-| `{base}-dc04` | Domain Controller (Site 1) | Standard_D2s_v5 | snet-site1 | 1 |
-| `{base}-dc05` | Domain Controller (Site 2) | Standard_D2s_v5 | snet-site2 | 1 |
-| `{base}-sqcs` | SQL Server (CAS DB) | Standard_D4s_v5 | snet-main | 2 |
-| `{base}-sqpa` | SQL Server (PrimA DB) | Standard_D4s_v5 | snet-main | 2 |
-| `{base}-sqpb` | SQL Server (PrimB DB) | Standard_D4s_v5 | snet-site1 | 2 |
-| `{base}-sqc1` | SQL AOAG Node 1 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
-| `{base}-sqc2` | SQL AOAG Node 2 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
-| `{base}-cas` | MCM CAS Server | Standard_D4s_v5 | snet-main | 3 |
-| `{base}-prma` | MCM Child Primary A | Standard_D4s_v5 | snet-main | 3 |
-| `{base}-prmb` | MCM Child Primary B | Standard_D4s_v5 | snet-site1 | 3 |
-| `{base}-prmc` | MCM Child Primary C | Standard_D4s_v5 | snet-site2 | 3 |
+| `{base}-dc01` | Domain Controller | Standard_D2s_v6 | snet-ad | 1 |
+| `{base}-dc02` | Domain Controller | Standard_D2s_v6 | snet-ad | 1 |
+| `{base}-dc03` | Domain Controller (Main) | Standard_D2s_v6 | snet-main | 1 |
+| `{base}-dc04` | Domain Controller (Site 1) | Standard_D2s_v6 | snet-site1 | 1 |
+| `{base}-dc05` | Domain Controller (Site 2) | Standard_D2s_v6 | snet-site2 | 1 |
+| `{base}-sqcs` | SQL Server (CAS DB) | Standard_D4s_v6 | snet-main | 2 |
+| `{base}-sqpa` | SQL Server (PrimA DB) | Standard_D4s_v6 | snet-main | 2 |
+| `{base}-sqpb` | SQL Server (PrimB DB) | Standard_D4s_v6 | snet-site1 | 2 |
+| `{base}-sqpc` | SQL Server (PrimC DB) | Standard_D4s_v6 | snet-site2 | 2 |
+| `{base}-cas` | MCM CAS Server | Standard_D4s_v6 | snet-main | 3 |
+| `{base}-prma` | MCM Child Primary A | Standard_D4s_v6 | snet-main | 3 |
+| `{base}-prmb` | MCM Child Primary B | Standard_D4s_v6 | snet-site1 | 3 |
+| `{base}-prmc` | MCM Child Primary C | Standard_D4s_v6 | snet-site2 | 3 |
 
 **Entra ID Integration VMs** (deployed when `enableEntraIntegration=true`):
 
 | Default Name | Role | Size | Subnet | Tier |
 |--------------|------|------|--------|------|
-| `{base}-entr` | Entra Connect Sync* | Standard_D2s_v5 | snet-ad | 1 |
-| `{base}-mgmt` | Management VM (Entra ID joined)** | Standard_D2s_v5 | snet-ad | Post |
+| `{base}-entr` | Entra Connect Sync* | Standard_D2s_v6 | snet-ad | 1 |
+| `{base}-mgmt` | Management VM (Entra ID joined)** | Standard_D2s_v6 | snet-ad | Post |
 
 \* Only deployed when `entraConnectPlacement='dedicated'`. Otherwise Entra Connect installs on DC02.
 
 \*\* Deployed separately via `deploy-mgmt.ps1` after the main lab is running.
 
-#### Colocated SQL Layout — SQL on MCM Servers (11 VMs)
+#### Colocated SQL Layout — SQL on MCM Servers (9 VMs)
 
-When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as MCM. The MCM VMs are upsized to Standard_D8s_v5 and get data disks. Site 2 AOAG nodes are always separate.
+When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB/PrimC runs on the same VM as MCM. The MCM VMs are upsized to Standard_D8s_v6 and get data disks.
 
 | Default Name | Role | Size | Subnet | Tier |
 |--------------|------|------|--------|------|
-| `{base}-dc01` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
-| `{base}-dc02` | Domain Controller | Standard_D2s_v5 | snet-ad | 1 |
-| `{base}-dc03` | Domain Controller (Main) | Standard_D2s_v5 | snet-main | 1 |
-| `{base}-dc04` | Domain Controller (Site 1) | Standard_D2s_v5 | snet-site1 | 1 |
-| `{base}-dc05` | Domain Controller (Site 2) | Standard_D2s_v5 | snet-site2 | 1 |
-| `{base}-sqc1` | SQL AOAG Node 1 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
-| `{base}-sqc2` | SQL AOAG Node 2 (PrimC) | Standard_D8s_v5 | snet-site2 | 2 |
-| `{base}-cas` | MCM CAS + SQL | Standard_D8s_v5 | snet-main | 3 |
-| `{base}-prma` | MCM Primary A + SQL | Standard_D8s_v5 | snet-main | 3 |
-| `{base}-prmb` | MCM Primary B + SQL | Standard_D8s_v5 | snet-site1 | 3 |
-| `{base}-prmc` | MCM Child Primary C | Standard_D4s_v5 | snet-site2 | 3 |
+| `{base}-dc01` | Domain Controller | Standard_D2s_v6 | snet-ad | 1 |
+| `{base}-dc02` | Domain Controller | Standard_D2s_v6 | snet-ad | 1 |
+| `{base}-dc03` | Domain Controller (Main) | Standard_D2s_v6 | snet-main | 1 |
+| `{base}-dc04` | Domain Controller (Site 1) | Standard_D2s_v6 | snet-site1 | 1 |
+| `{base}-dc05` | Domain Controller (Site 2) | Standard_D2s_v6 | snet-site2 | 1 |
+| `{base}-cas` | MCM CAS + SQL | Standard_D8s_v6 | snet-main | 3 |
+| `{base}-prma` | MCM Primary A + SQL | Standard_D8s_v6 | snet-main | 3 |
+| `{base}-prmb` | MCM Primary B + SQL | Standard_D8s_v6 | snet-site1 | 3 |
+| `{base}-prmc` | MCM Primary C + SQL | Standard_D8s_v6 | snet-site2 | 3 |
 
 > **Note:** All VM names (except DCs) can be overridden during deployment. The script displays a naming table and lets you customize each name.
 
@@ -127,27 +122,25 @@ When `-ColocateSql` is specified, SQL for CAS/PrimA/PrimB runs on the same VM as
 
 Ensure your subscription has sufficient vCPU quota in the target region:
 
-#### Separate SQL mode (default — 14 VMs)
+#### Separate SQL mode (default — 13 VMs)
 
 | VM Size | vCPUs each | Count | Total vCPUs |
 |---------|-----------|-------|-------------|
-| Standard_D2s_v5 | 2 | 5 (DCs) | 10 |
-| Standard_D4s_v5 | 4 | 7 (3 standalone SQL + 4 MCM) | 28 |
-| Standard_D8s_v5 | 8 | 2 (SQL AOAG) | 16 |
-| **Total** | | **14** | **54 vCPUs** |
+| Standard_D2s_v6 | 2 | 5 (DCs) | 10 |
+| Standard_D4s_v6 | 4 | 8 (4 standalone SQL + 4 MCM) | 32 |
+| **Total** | | **13** | **42 vCPUs** |
 
-#### Colocated SQL mode (`-ColocateSql` — 11 VMs)
+#### Colocated SQL mode (`-ColocateSql` — 9 VMs)
 
 | VM Size | vCPUs each | Count | Total vCPUs |
 |---------|-----------|-------|-------------|
-| Standard_D2s_v5 | 2 | 5 (DCs) | 10 |
-| Standard_D4s_v5 | 4 | 1 (PrimC — no SQL) | 4 |
-| Standard_D8s_v5 | 8 | 5 (3 MCM+SQL colocated + 2 AOAG) | 40 |
-| **Total** | | **11** | **54 vCPUs** |
+| Standard_D2s_v6 | 2 | 5 (DCs) | 10 |
+| Standard_D8s_v6 | 8 | 4 (MCM+SQL colocated) | 32 |
+| **Total** | | **9** | **42 vCPUs** |
 
 Check quota:
 ```bash
-az vm list-usage --location eastus --output table | grep -i "Standard DSv5"
+az vm list-usage --location eastus --output table | grep -i "Standard DSv6"
 ```
 
 ### Install Prerequisites
@@ -173,8 +166,8 @@ The deployment uses a **tiered** approach so you can deploy incrementally:
 
 | Tier | What Gets Deployed | Use Case |
 |------|-------------------|----------|
-| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), File Share Witness Storage (Azure Files + PE — no public access, shared keys disabled), Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
-| **2** | + SQL VMs (with data disks), Availability Set, Internal Load Balancer. Standalone SQL VMs are skipped when `colocateSql` is true — only AOAG nodes are deployed. **Auto domain-join** SQL VMs (unless `joinDomain=false`). **Auto-registers File Share Witness storage account in AD** for Kerberos SMB (WSFC quorum). | Add SQL infrastructure |
+| **1** | VNet, Subnets, NSGs, Azure Bastion, VPN Gateway (P2S), 2 DCs (static IPs), Key Vault (private endpoint — no public access), **AD DS automation** (forest promotion, OUs, groups, service accounts, gMSA, replica DC) | Set up core networking, VPN, and AD only |
+| **2** | + SQL VMs (with data disks), one per site (CAS, PrimA, PrimB, PrimC). Standalone SQL VMs are skipped when `colocateSql` is true (SQL colocated on MCM). **Auto domain-join** SQL VMs (unless `joinDomain=false`). | Add SQL infrastructure |
 | **3** | + MCM Application VMs (CAS + 3 child primaries). When `colocateSql` is true, MCM VMs are upsized and get data disks for SQL. **Auto domain-join** MCM VMs (unless `joinDomain=false`). | Full lab deployment |
 
 Each tier is **cumulative** — Tier 3 includes everything from Tiers 1 and 2.
@@ -262,7 +255,7 @@ The script will:
   - Auto-detect existing infrastructure and reuse the admin password from Key Vault
   - Auto-detect the AD domain name from DC01 (or accept `-DomainName` parameter)
   - Skip Key Vault RBAC prompts
-- **Auto-detect existing private DNS zones** (`privatelink.file`, `privatelink.vaultcore`) linked to the lab VNet — reuses them instead of creating duplicates (avoids conflicts when ArtifactsStorage or other add-on projects deployed first)
+- **Auto-detect existing private DNS zone** (`privatelink.vaultcore`) linked to the lab VNet — reuses it instead of creating a duplicate (avoids conflicts when ArtifactsStorage or other add-on projects deployed first)
 - Prompt for Key Vault Administrator (user UPN or Entra ID group) — first deployment only
 - Compile and validate the Bicep template
 - Auto-generate a secure admin password (stored in Key Vault) — first deployment only
@@ -329,7 +322,6 @@ Azure-Lab/
 ├── deploy.ps1                             # PowerShell wrapper (prereqs, incremental detection, naming, deploy)
 ├── deploy-mgmt.ps1                        # Standalone: deploy management VM (Entra ID joined)
 ├── deploy-vm.ps1                          # Standalone: deploy a single VM into any lab subnet
-├── Register-WitnessStorage.ps1            # Standalone: register witness storage account in AD
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
 ├── Set-VpnDnsConfig.ps1                   # Helper: configure DNS NRPT rules for VPN private endpoint access
 ├── main.bicep                             # Subscription-scoped orchestrator (AD lab infrastructure)
@@ -348,12 +340,10 @@ Azure-Lab/
     │   ├── bastion.bicep                  # Azure Bastion (Standard) + Public IP
     │   └── vpnGateway.bicep               # VPN Gateway (P2S, certificate auth) + Public IP
     ├── compute/
-    │   ├── vm.bicep                       # Reusable Windows Server VM module
-    │   ├── availabilitySet.bicep           # Availability Set for AOAG SQL nodes
-    │   └── loadBalancer.bicep              # Internal Load Balancer for AOAG listener
+    │   └── vm.bicep                       # Reusable Windows Server VM module
     ├── storage/
-    │   ├── storageAccount.bicep           # File Share Witness storage account (Azure Files + AD DS auth)
-    │   └── storagePrivateEndpoint.bicep   # Storage PE + private DNS zone (privatelink.file)
+    │   ├── storageAccount.bicep           # Reusable storage account (Azure Files + AD DS auth)
+    │   └── storagePrivateEndpoint.bicep   # Reusable storage PE + private DNS zone (privatelink.file)
     ├── security/
     │   ├── keyVault.bicep                 # Key Vault (password storage + RBAC assignment)
     │   └── keyVaultPrivateEndpoint.bicep   # Key Vault PE + private DNS zone
@@ -404,22 +394,20 @@ Azure-Lab/
 | `baseName` | string | `azlab` | Base name prefix for all resources (max 10 chars) |
 | `location` | string | `eastus` | Azure region |
 | `deploymentTier` | int | `3` | 1 = Core/AD, 2 = +SQL, 3 = +MCM servers (full) |
-| `colocateSql` | bool | `false` | When true, SQL runs on MCM servers (no separate SQL VMs for CAS/PrimA/PrimB) |
+| `colocateSql` | bool | `false` | When true, SQL runs on MCM servers (no separate SQL VMs for CAS/PrimA/PrimB/PrimC) |
 | `joinDomain` | bool | `true` | When true, SQL and MCM VMs are auto-joined to the AD domain using `svc-domjoin`. SQL VMs → OU=SQL Servers, MCM VMs → OU=App Servers |
 | `adminUsername` | string | `labadmin` | Local admin username for all VMs |
 | `adminPassword` | securestring | — | Local admin password (auto-generated by deploy.ps1) |
 | `domainName` | string | — | AD domain name (prompted or auto-detected by deploy.ps1) |
-| `sizeDC` | string | `Standard_D2s_v5` | VM size for Domain Controllers |
-| `sizeApp` | string | `Standard_D4s_v5` | VM size for MCM servers (when SQL is separate) |
-| `sizeAppColocated` | string | `Standard_D8s_v5` | VM size for MCM servers when SQL is colocated |
-| `sizeSQL` | string | `Standard_D4s_v5` | VM size for standalone SQL VMs |
-| `sizeSQLAoag` | string | `Standard_D8s_v5` | VM size for AOAG SQL VMs |
+| `sizeDC` | string | `Standard_D2s_v6` | VM size for Domain Controllers |
+| `sizeApp` | string | `Standard_D4s_v6` | VM size for MCM servers (when SQL is separate) |
+| `sizeAppColocated` | string | `Standard_D8s_v6` | VM size for MCM servers when SQL is colocated |
+| `sizeSQL` | string | `Standard_D4s_v6` | VM size for standalone SQL VMs (CAS, PrimA, PrimB, PrimC) |
 | **VM Naming** | | | |
 | `vmNameSqlCas` | string | `{base}-sqcs` | SQL VM for CAS site (ignored when colocateSql=true) |
 | `vmNameSqlPrimA` | string | `{base}-sqpa` | SQL VM for Primary A (ignored when colocateSql=true) |
 | `vmNameSqlPrimB` | string | `{base}-sqpb` | SQL VM for Primary B (ignored when colocateSql=true) |
-| `vmNameSqlAoag1` | string | `{base}-sqc1` | SQL AOAG Node 1 (Site 2) |
-| `vmNameSqlAoag2` | string | `{base}-sqc2` | SQL AOAG Node 2 (Site 2) |
+| `vmNameSqlPrimC` | string | `{base}-sqpc` | SQL VM for Primary C at Site 2 (ignored when colocateSql=true) |
 | `vmNameCas` | string | `{base}-cas` | MCM CAS server |
 | `vmNamePrimA` | string | `{base}-prma` | MCM Child Primary A |
 | `vmNamePrimB` | string | `{base}-prmb` | MCM Child Primary B |
@@ -444,13 +432,11 @@ Azure-Lab/
 | `dcMainIp` | string | `10.0.20.250` | Static IP for DC in Main site subnet |
 | `dcSite1Ip` | string | `10.0.30.250` | Static IP for DC in Site 1 subnet |
 | `dcSite2Ip` | string | `10.0.40.250` | Static IP for DC in Site 2 subnet |
-| `aoagListenerIp` | string | `10.0.40.10` | AOAG Listener IP (ILB frontend) |
 | `imagePublisher` | string | `MicrosoftWindowsServer` | OS image publisher |
 | `imageOffer` | string | `WindowsServer` | OS image offer |
 | `imageSku` | string | `2022-datacenter-g2` | OS image SKU (`2022-datacenter-g2` or `2025-datacenter-g2`) |
 | `envTag` | string | `lab` | Environment tag value |
 | **Private DNS Zone Reuse** | | | |
-| `existingFileDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.file` DNS zone (auto-detected by `deploy.ps1`) |
 | `existingKvDnsZoneId` | string | `''` | Resource ID of an existing `privatelink.vaultcore` DNS zone (auto-detected by `deploy.ps1`) |
 | **Entra ID Integration** | | | |
 | `enableEntraIntegration` | bool | `false` | Enable Entra ID hybrid identity features |
@@ -459,7 +445,7 @@ Azure-Lab/
 | `entraConnectPlacement` | string | `dc02` | `dc02` = install on DC02, `dedicated` = separate VM |
 | `vmNameMgmt` | string | `{base}-mgmt` | Management VM name (Entra ID joined) |
 | `vmNameEntraConnect` | string | `{base}-entr` | Entra Connect VM name (when placement = dedicated) |
-| `sizeManagement` | string | `Standard_D2s_v5` | VM size for Management VM and Entra Connect VM |
+| `sizeManagement` | string | `Standard_D2s_v6` | VM size for Management VM and Entra Connect VM |
 
 ---
 
@@ -481,7 +467,7 @@ Use `deploy-vm.ps1` to deploy an individual VM into any existing lab subnet with
 .\deploy-vm.ps1 -BaseName azlab -VmName azlab-sql01 -Location eastus -Subnet site2 -StaticIp 10.0.40.20 -DataDiskCount 2
 
 # Custom VM size
-.\deploy-vm.ps1 -BaseName azlab -VmName azlab-big01 -Location eastus -Subnet main -VmSize Standard_D4s_v5
+.\deploy-vm.ps1 -BaseName azlab -VmName azlab-big01 -Location eastus -Subnet main -VmSize Standard_D4s_v6
 
 # Preview without deploying
 .\deploy-vm.ps1 -BaseName azlab -VmName azlab-test01 -Location eastus -WhatIf
@@ -499,7 +485,7 @@ Use `deploy-vm.ps1` to deploy an individual VM into any existing lab subnet with
 | `-Location` | string | (required) | Azure region (must match lab deployment) |
 | `-Subnet` | string | (prompt) | Target subnet: `ad`, `main`, `site1`, or `site2` |
 | `-OsImage` | string | (prompt) | OS version: `2022` or `2025`. If omitted, an interactive menu is shown. |
-| `-VmSize` | string | `Standard_D2s_v5` | VM size SKU |
+| `-VmSize` | string | `Standard_B2as_v2` | VM size SKU |
 | `-AdminPassword` | string | (Key Vault) | VM admin password. If omitted, retrieved from Key Vault (requires VPN + DNS). |
 | `-SkipDomainJoin` | switch | `$false` | Deploy as workgroup server (no AD join) |
 | `-OuPath` | string | `OU=App Servers,...` | OU path for the computer object |
@@ -752,91 +738,17 @@ Available presets:
 ### 5. SQL Server Installation
 1. Install SQL Server (Enterprise or Developer edition) on SQL VMs
    - **Separate SQL mode**: Install on all dedicated SQL VMs
-   - **Colocated SQL mode**: Install on the MCM VMs (CAS, PrimA, PrimB) and AOAG nodes
+   - **Colocated SQL mode**: Install on the MCM VMs (CAS, PrimA, PrimB, PrimC)
 2. SQL VMs have **2 × 128GB Premium SSD data disks** pre-attached:
    - LUN 0: SQL Data files (drive D:)
    - LUN 1: SQL Log files (drive E:)
 3. Format and mount data disks before SQL installation
 
-### 6. WSFC + AOAG Configuration (Site 2)
-
-#### 6a. Register File Share Witness Storage Account in AD (Automated)
-
-The File Share Witness storage account is deployed during Tier 1 with shared keys disabled and a private endpoint. Before the cluster can use it as a WSFC quorum witness, the storage account must be registered as a computer object in AD for Kerberos SMB authentication.
-
-**This step is automated by `deploy.ps1`** — when deploying Tier 2 or higher with domain join enabled, the script automatically:
-
-1. **Preserves existing AD DS config** — before deploying Bicep, the script snapshots any existing `azureFilesIdentityBasedAuthentication` settings on the witness storage account. After the Bicep deployment (which resets them to `null`), the saved config is immediately restored. This prevents unnecessary kerb1 key regeneration on redeployments.
-2. Discovers the witness storage account by tag (`workload=file-share-witness`) in `{base}-rg-identity`
-3. **Skips registration if already configured** — if AD DS authentication is already enabled (either preserved from step 1 or from a previous deployment), the entire registration is skipped
-4. Temporarily enables shared key access (required to generate the Kerberos key)
-5. Generates and retrieves the `kerb1` Kerberos key
-6. Runs `Register-StorageInAD.ps1` on DC01 via RunCommand — creates a computer account DISABLED in AD, then uses `ktpass` as the single password-setting operation to set the AES-256 key with the correct salt, then enables the account. Also cleans up any leftover service logon accounts from previous troubleshooting.
-7. Configures the storage account with AD DS identity (domain GUID, SID, forest name)
-8. **Flushes KDC cache on ALL Domain Controllers** — discovers DCs by Azure VM tag (`role=domain-controller`) and restarts the KDC service on each. This ensures site DCs (dc03, dc04, dc05) also pick up the new AES key immediately rather than serving stale cached keys.
-9. Verifies the Kerberos SMB mount from a domain-joined AOAG SQL node (**with retry** — up to 5 attempts with 30-second delay to accommodate AD replication)
-10. Re-disables shared key data-plane access
-
-> **Redeployment safety:** On redeployments, `deploy.ps1` preserves the AD DS identity configuration across the Bicep PUT operation. This eliminates the window where a regenerated kerb1 key hasn't propagated to all DCs — the primary cause of error 1396 on redeployment.
-
-> **Manual fallback:** If the automated registration fails (e.g., DC01 not reachable), the script logs a warning and continues. You can re-run the deployment — the registration will be retried. To troubleshoot, check the RunCommand output in the Azure Portal for DC01.
-
-**Standalone execution** (already-deployed lab):
-```powershell
-# Register witness storage in AD (no full redeploy needed)
-.\Register-WitnessStorage.ps1 -BaseName azlab
-
-# With explicit domain name
-.\Register-WitnessStorage.ps1 -BaseName azlab -DomainName azlab.local
-
-# Re-register (even if already configured)
-.\Register-WitnessStorage.ps1 -BaseName azlab -Force
-```
-
-> **Error 1396** ("target account name is incorrect") during mount verification indicates an AES-256 key mismatch between the storage account's kerb1 key and the AD computer account's AES key. Common causes:
-> - **Stale KDC cache** on a site DC — `Register-WitnessStorage.ps1 -Force` will flush all DCs
-> - **Redeployment wiped AD DS config** — now prevented by the save/restore logic in `deploy.ps1`
-> - **AD replication latency** — the mount retry loop (5 attempts, 30s delay) handles this
-
-#### 6b. Create Failover Cluster and Configure Quorum
-1. Enable the **Failover Clustering** feature on both AOAG SQL nodes
-2. Create a **Windows Server Failover Cluster** with both Site 2 SQL VMs
-3. Configure **File Share Witness** quorum:
-   ```powershell
-   Set-ClusterQuorum -Cluster <ClusterName> -FileShareWitness "\\<stg-name>.file.core.windows.net\witness"
-   ```
-   Verify: `Get-ClusterQuorum | Select-Object QuorumResource`
-
-#### 6c. Configure Always On Availability Group
-4. Enable **AlwaysOn Availability Groups** in SQL Server Configuration Manager
-5. Create the Availability Group and configure the **AG Listener**:
-   - Listener Name: `LISTENER-C`
-   - IP Address: `10.0.40.10` (ILB frontend)
-   - Probe Port: `59999`
-   - SQL Port: `1433`
-6. On each AOAG SQL node, configure the ILB probe port:
-   ```powershell
-   # Run on each SQL AOAG node
-   $ClusterNetworkName = "Cluster Network 1"
-   $IPResourceName = "LISTENER-C_10.0.40.10"
-   $ListenerILBIP = "10.0.40.10"
-   $ListenerProbePort = 59999
-
-   Get-ClusterResource $IPResourceName |
-     Set-ClusterParameter -Multiple @{
-       Address = $ListenerILBIP
-       ProbePort = $ListenerProbePort
-       SubnetMask = "255.255.255.255"
-       Network = $ClusterNetworkName
-       EnableDhcp = 0
-     }
-   ```
-
-### 7. MCM Application Workload Installation
+### 6. MCM Application Workload Installation
 1. **Install CAS** on the CAS VM using its SQL instance (colocated or dedicated)
 2. **Install Primary A** on the PrimA VM using its SQL instance (same site as CAS)
 3. **Install Primary B** on the PrimB VM using its SQL instance (remote Site 1)
-4. **Install Primary C** on the PrimC VM using AOAG listener `LISTENER-C` on the Site 2 SQL cluster
+4. **Install Primary C** on the PrimC VM using its SQL instance (remote Site 2)
 
 > **Note:** When colocated, SQL is on the same VM as the MCM role — update SQL instance names accordingly during MCM setup.
 
@@ -849,10 +761,10 @@ The File Share Witness storage account is deployed during Tier 1 with shared key
 | Resource Group | Contents |
 |---------------|----------|
 | `{base}-rg-network` | VNet, NSGs, Azure Bastion, VPN Gateway, Public IPs |
-| `{base}-rg-identity` | DC01, DC02, Key Vault, File Share Witness Storage Account |
+| `{base}-rg-identity` | DC01, DC02, Key Vault |
 | `{base}-rg-main` | SQL-CAS, SQL-PrimA, CAS, PrimaryA (SQL VMs omitted when colocated) |
 | `{base}-rg-site1` | SQL-PrimB, PrimaryB (SQL VM omitted when colocated) |
-| `{base}-rg-site2` | SQL AOAG Node 1, SQL AOAG Node 2, Availability Set, ILB, PrimaryC |
+| `{base}-rg-site2` | SQL-PrimC, PrimaryC (SQL VM omitted when colocated) |
 
 ---
 
@@ -896,7 +808,6 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 | **Name conflict** | Storage account names are globally unique. Change `baseName` or the name will auto-resolve via `uniqueString()`. |
 | **Bicep compilation error** | Run `az bicep build --file main.bicep` to see detailed errors |
 | **Can't connect via Bastion** | Ensure NSG on target subnet allows inbound from `AzureBastionSubnet` on port 3389 (configured by default) |
-| **AOAG Listener not responding** | Verify ILB probe port (59999) is open, floating IP is enabled, and cluster IP resource is configured |
 | **VPN Gateway still provisioning** | VPN Gateways take 25–45 minutes. Check status: Portal → `{base}-vpngw` → Overview |
 | **VPN client can't connect** | Verify client cert is in `CurrentUser\My` and root cert is in `CurrentUser\Trusted Root`. Re-download VPN client config. |
 | **VPN connected but can't reach VMs** | Ensure VPN client address pool (`172.16.0.0/24`) doesn't overlap with your local network. Check NSG rules allow traffic. |
@@ -921,8 +832,6 @@ az group list --tag env=lab --query "[].name" -o tsv | ForEach-Object { az group
 ## References
 
 - [Application Installation (MECM CAS/Primary)](https://learn.microsoft.com/mem/configmgr/core/servers/deploy/install/setup-wizard-central-primary)
-- [Azure ILB for AG Listener](https://learn.microsoft.com/azure/azure-sql/virtual-machines/windows/availability-group-load-balancer-portal-configure)
-- [File Share Witness for WSFC Quorum](https://learn.microsoft.com/windows-server/failover-clustering/manage-cluster-quorum#configure-the-cluster-quorum)
 - [Azure Files AD DS Authentication](https://learn.microsoft.com/azure/storage/files/storage-files-identity-ad-ds-enable)
 - [Azure Bastion Documentation](https://learn.microsoft.com/azure/bastion/bastion-overview)
 - [Azure P2S VPN with Certificate Auth](https://learn.microsoft.com/azure/vpn-gateway/vpn-gateway-howto-point-to-site-resource-manager-portal)

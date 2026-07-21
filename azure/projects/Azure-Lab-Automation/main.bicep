@@ -2,9 +2,9 @@
 // Azure Global Lab — Main Orchestrator (Subscription-Scoped)
 //
 // Deploys a modular Azure lab environment across 3 tiers:
-//   Tier 1: Core networking, AD Domain Controllers, Azure Bastion, Cloud Witness
+//   Tier 1: Core networking, AD Domain Controllers, Azure Bastion
 //          Optional: Entra Connect Sync + Management VM (hybrid identity)
-//   Tier 2: SQL Server VMs (5 total) including AOAG pair at Site 2 with ILB
+//   Tier 2: SQL Server VMs (one per site: CAS, PrimA, PrimB, PrimC)
 //   Tier 3: Application VMs (CAS + 3 child primaries)
 //
 // Usage:
@@ -71,22 +71,19 @@ param vmNameEntraConnect string = '${baseName}-entr'
 // --- VM Sizes ----------------------------------------------------------------
 
 @description('VM size for Domain Controllers')
-param sizeDC string = 'Standard_D2s_v5'
+param sizeDC string = 'Standard_D2s_v6'
 
 @description('VM size for Management and Entra Connect VMs')
-param sizeManagement string = 'Standard_D2s_v5'
+param sizeManagement string = 'Standard_D2s_v6'
 
 @description('VM size for MCM site servers (when SQL is separate)')
-param sizeApp string = 'Standard_D4s_v5'
+param sizeApp string = 'Standard_D4s_v6'
 
 @description('VM size for MCM site servers when SQL is colocated (needs more RAM/CPU)')
-param sizeAppColocated string = 'Standard_D8s_v5'
+param sizeAppColocated string = 'Standard_D8s_v6'
 
-@description('VM size for standalone SQL VMs (CAS, PrimA, PrimB)')
-param sizeSQL string = 'Standard_D4s_v5'
-
-@description('VM size for AOAG SQL VMs (Site 2 — PrimC)')
-param sizeSQLAoag string = 'Standard_D8s_v5'
+@description('VM size for standalone SQL VMs (CAS, PrimA, PrimB, PrimC)')
+param sizeSQL string = 'Standard_D4s_v6'
 
 // --- Disk SKUs ---------------------------------------------------------------
 
@@ -111,7 +108,7 @@ param snetMainPrefix string = '10.0.20.0/24'
 @description('Site 1 subnet CIDR (PrimB, SQL-PrimB)')
 param snetSite1Prefix string = '10.0.30.0/24'
 
-@description('Site 2 subnet CIDR (PrimC, SQL-PrimC AOAG nodes, ILB)')
+@description('Site 2 subnet CIDR (PrimC, SQL-PrimC)')
 param snetSite2Prefix string = '10.0.40.0/24'
 
 @description('GatewaySubnet CIDR for VPN Gateway (/27 minimum)')
@@ -145,20 +142,14 @@ param dcSite1Ip string = '10.0.30.250'
 @description('Static IP for DC in Site 2 subnet')
 param dcSite2Ip string = '10.0.40.250'
 
-@description('AOAG Listener IP (ILB frontend) in Site 2 subnet')
-param aoagListenerIp string = '10.0.40.10'
-
 // --- Private DNS Zone Reuse --------------------------------------------------
-
-@description('Resource ID of an existing privatelink.file DNS zone. When provided, the File Share Witness PE skips DNS zone and VNet link creation to avoid conflicts (e.g., when ArtifactsStorage already created the zone).')
-param existingFileDnsZoneId string = ''
 
 @description('Resource ID of an existing privatelink.vaultcore DNS zone. When provided, the Key Vault PE skips DNS zone and VNet link creation to avoid conflicts.')
 param existingKvDnsZoneId string = ''
 
 // --- Colocated SQL+MCM option -------------------------------------------------
 
-@description('When true, SQL is installed on the MCM server (no separate SQL VMs for CAS/PrimA/PrimB). Site 2 AOAG nodes are always deployed.')
+@description('When true, SQL is installed on the MCM server (no separate SQL VMs for CAS/PrimA/PrimB/PrimC).')
 param colocateSql bool = false
 
 @description('When true, SQL and MCM VMs are automatically domain-joined after deployment using the svc-domjoin service account.')
@@ -180,13 +171,9 @@ param vmNameSqlPrimA string = '${baseName}-sqpa'
 @maxLength(15)
 param vmNameSqlPrimB string = '${baseName}-sqpb'
 
-@description('VM name: AOAG SQL node 1 at Site 2')
+@description('VM name: SQL for Primary C at Site 2 (ignored when colocateSql=true)')
 @maxLength(15)
-param vmNameSqlAoag1 string = '${baseName}-sqc1'
-
-@description('VM name: AOAG SQL node 2 at Site 2')
-@maxLength(15)
-param vmNameSqlAoag2 string = '${baseName}-sqc2'
+param vmNameSqlPrimC string = '${baseName}-sqpc'
 
 @description('VM name: CAS (Central Administration Site)')
 @maxLength(15)
@@ -312,11 +299,11 @@ resource rgSite1Res 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 resource rgSite2Res 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: rgSite2
   location: location
-  tags: union(commonTags, { workload: 'site2-aoag' })
+  tags: union(commonTags, { workload: 'site2' })
 }
 
 // =============================================================================
-// TIER 1: Core Networking, AD, Bastion, Cloud Witness
+// TIER 1: Core Networking, AD, Bastion
 // =============================================================================
 
 // --- VNet & Subnets ----------------------------------------------------------
@@ -407,37 +394,6 @@ module keyVaultPe 'modules/security/keyVaultPrivateEndpoint.bicep' = {
     existingPrivateDnsZoneId: existingKvDnsZoneId
     location: location
     tags: union(commonTags, { workload: 'secrets' })
-  }
-}
-
-// --- File Share Witness Storage Account (WSFC Quorum) ------------------------
-// Deploys a locked-down Azure Files share for WSFC File Share Witness.
-// AD DS registration is a post-deployment step — see README Section 6.
-
-module cloudWitness 'modules/storage/storageAccount.bicep' = {
-  name: 'deploy-cloud-witness'
-  scope: rgId
-  params: {
-    namePrefix: 'stgcw'
-    location: location
-    skuName: 'Standard_LRS'
-    shareName: 'witness'
-    shareQuotaGiB: 5
-    tags: union(commonTags, { workload: 'file-share-witness' })
-  }
-}
-
-module cloudWitnessPe 'modules/storage/storagePrivateEndpoint.bicep' = {
-  name: 'deploy-cloud-witness-pe'
-  scope: rgNet
-  params: {
-    storageAccountId: cloudWitness.outputs.storageAccountId
-    storageAccountName: cloudWitness.outputs.storageAccountName
-    subnetId: vnet.outputs.snetPeId
-    vnetId: vnet.outputs.vnetId
-    existingPrivateDnsZoneId: existingFileDnsZoneId
-    location: location
-    tags: union(commonTags, { workload: 'file-share-witness' })
   }
 }
 
@@ -713,38 +669,8 @@ module installEntraConnect 'modules/identity/entraConnect.bicep' = if (enableEnt
 }
 
 // =============================================================================
-// TIER 2: SQL Server VMs + AOAG Infrastructure
+// TIER 2: SQL Server VMs
 // =============================================================================
-
-// --- Availability Set for Site 2 AOAG SQL nodes ------------------------------
-
-module avsetSqlSite2 'modules/compute/availabilitySet.bicep' = if (deploymentTier >= 2) {
-  name: 'deploy-avset-sql-site2'
-  scope: rgSite2Res
-  params: {
-    name: '${baseName}-avset-sql-site2'
-    location: location
-    faultDomainCount: 2
-    updateDomainCount: 5
-    tags: union(commonTags, { workload: 'sql-aoag' })
-  }
-}
-
-// --- Internal Load Balancer for AOAG Listener --------------------------------
-
-module ilb 'modules/compute/loadBalancer.bicep' = if (deploymentTier >= 2) {
-  name: 'deploy-ilb-aoag'
-  scope: rgSite2Res
-  params: {
-    lbName: '${baseName}-ilb-aoag'
-    location: location
-    subnetId: vnet.outputs.snetSite2Id
-    frontendIp: aoagListenerIp
-    tags: union(commonTags, { workload: 'sql-aoag' })
-  }
-}
-
-// --- SQL VM: CAS (Main Site) -------------------------------------------------
 
 // --- SQL VM: CAS (Main Site) — skipped when colocateSql is true --------------
 
@@ -818,15 +744,15 @@ module sqlPrimb 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocat
   }
 }
 
-// --- SQL VM: Primary C — AOAG Node 1 (Site 2) — always deployed -------------
+// --- SQL VM: Primary C (Site 2) — skipped when colocateSql is true -----------
 
-module sqlPrimc01 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
-  name: 'deploy-sql-primc01'
+module sqlPrimc 'modules/compute/vm.bicep' = if (deploymentTier >= 2 && !colocateSql) {
+  name: 'deploy-sql-primc'
   scope: rgSite2Res
   params: {
-    vmName: vmNameSqlAoag1
+    vmName: vmNameSqlPrimC
     location: location
-    vmSize: sizeSQLAoag
+    vmSize: sizeSQL
     subnetId: vnet.outputs.snetSite2Id
     adminUsername: adminUsername
     adminPassword: adminPassword
@@ -836,37 +762,9 @@ module sqlPrimc01 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
     dataDiskCount: 2
     dataDiskSizeGb: 128
     dataDiskSku: 'Premium_LRS'
-    availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
-    loadBalancerBackendPoolId: ilb.outputs.backendPoolId
     osDiskSku: osDiskSku
     dnsServers: [dcSite2Ip, dc01Ip]
-    tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '1' })
-  }
-}
-
-// --- SQL VM: Primary C — AOAG Node 2 (Site 2) — always deployed -------------
-
-module sqlPrimc02 'modules/compute/vm.bicep' = if (deploymentTier >= 2) {
-  name: 'deploy-sql-primc02'
-  scope: rgSite2Res
-  params: {
-    vmName: vmNameSqlAoag2
-    location: location
-    vmSize: sizeSQLAoag
-    subnetId: vnet.outputs.snetSite2Id
-    adminUsername: adminUsername
-    adminPassword: adminPassword
-    imagePublisher: imagePublisher
-    imageOffer: imageOffer
-    imageSku: imageSku
-    dataDiskCount: 2
-    dataDiskSizeGb: 128
-    dataDiskSku: 'Premium_LRS'
-    availabilitySetId: avsetSqlSite2.outputs.availabilitySetId
-    loadBalancerBackendPoolId: ilb.outputs.backendPoolId
-    osDiskSku: osDiskSku
-    dnsServers: [dcSite2Ip, dc01Ip]
-    tags: union(commonTags, { role: 'sql-server-aoag', site: 'site2', aoagNode: '2' })
+    tags: union(commonTags, { role: 'sql-server', site: 'site2' })
   }
 }
 
@@ -917,27 +815,12 @@ module djSqlPrimB 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 
   }
 }
 
-module djSqlAoag1 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && joinDomain) {
-  name: 'deploy-dj-sql-aoag1'
+module djSqlPrimC 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && !colocateSql && joinDomain) {
+  name: 'deploy-dj-sql-primc'
   scope: rgSite2Res
-  dependsOn: [sqlPrimc01, configureAd, promoteDc02]
+  dependsOn: [sqlPrimc, configureAd, promoteDc02]
   params: {
-    vmName: vmNameSqlAoag1
-    location: location
-    domainName: domainName
-    domainJoinUser: domainJoinUser
-    domainJoinPassword: adminPassword
-    ouPath: 'OU=SQL Servers,OU=Lab Servers,${domainDN}'
-    tags: union(commonTags, { role: 'domain-join' })
-  }
-}
-
-module djSqlAoag2 'modules/identity/domainJoin.bicep' = if (deploymentTier >= 2 && joinDomain) {
-  name: 'deploy-dj-sql-aoag2'
-  scope: rgSite2Res
-  dependsOn: [sqlPrimc02, configureAd, promoteDc02]
-  params: {
-    vmName: vmNameSqlAoag2
+    vmName: vmNameSqlPrimC
     location: location
     domainName: domainName
     domainJoinUser: domainJoinUser
@@ -1039,9 +922,12 @@ module primcVm 'modules/compute/vm.bicep' = if (deploymentTier >= 3) {
     imagePublisher: imagePublisher
     imageOffer: imageOffer
     imageSku: imageSku
+    dataDiskCount: colocateSql ? 2 : 0
+    dataDiskSizeGb: colocateSql ? 128 : 0
+    dataDiskSku: colocateSql ? 'Premium_LRS' : 'Standard_LRS'
     osDiskSku: osDiskSku
     dnsServers: [dcSite2Ip, dc01Ip]
-    tags: union(commonTags, { role: 'child-primary', site: 'site2' })
+    tags: union(commonTags, { role: colocateSql ? 'child-primary-sql' : 'child-primary', site: 'site2' })
   }
 }
 
@@ -1121,8 +1007,6 @@ output resourceGroups object = {
 
 output vnetId string = vnet.outputs.vnetId
 output bastionName string = bastion.outputs.bastionName
-output cloudWitnessStorageAccount string = cloudWitness.outputs.storageAccountName
-output cloudWitnessFileShareName string = cloudWitness.outputs.fileShareName
 output keyVaultName string = keyVault.outputs.keyVaultName
 output keyVaultSecretName string = keyVault.outputs.secretName
 

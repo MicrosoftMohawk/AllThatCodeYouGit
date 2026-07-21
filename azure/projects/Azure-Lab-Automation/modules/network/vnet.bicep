@@ -24,7 +24,7 @@ param snetMainPrefix string = '10.0.20.0/24'
 @description('Site 1 subnet CIDR (PrimB, SQL-PrimB)')
 param snetSite1Prefix string = '10.0.30.0/24'
 
-@description('Site 2 subnet CIDR (PrimC, SQL-PrimC AOAG, ILB)')
+@description('Site 2 subnet CIDR (PrimC, SQL-PrimC)')
 param snetSite2Prefix string = '10.0.40.0/24'
 
 @description('Tags to apply to all resources')
@@ -231,45 +231,6 @@ resource nsgSite2 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
           sourcePortRange: '*'
           destinationAddressPrefix: 'VirtualNetwork'
           destinationPortRange: '*'
-        }
-      }
-      {
-        name: 'Allow-SQL-AOAG'
-        properties: {
-          priority: 300
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: snetSite2Prefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: snetSite2Prefix
-          destinationPortRange: '1433'
-        }
-      }
-      {
-        name: 'Allow-AOAG-Endpoint'
-        properties: {
-          priority: 310
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: snetSite2Prefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: snetSite2Prefix
-          destinationPortRange: '5022'
-        }
-      }
-      {
-        name: 'Allow-ILB-Probe'
-        properties: {
-          priority: 320
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: 'AzureLoadBalancer'
-          sourcePortRange: '*'
-          destinationAddressPrefix: '*'
-          destinationPortRange: '59999'
         }
       }
       {

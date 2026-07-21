@@ -8,8 +8,8 @@
     login session, and executes the Bicep deployment at the subscription scope.
 
     The deployment is tiered:
-      Tier 1: Core networking, AD Domain Controllers, Azure Bastion, File Share Witness
-      Tier 2: + SQL Server VMs (5 total, including AOAG pair at Site 2 with ILB)
+      Tier 1: Core networking, AD Domain Controllers, Azure Bastion
+      Tier 2: + SQL Server VMs (one per site: CAS, PrimA, PrimB, PrimC)
       Tier 3: + Application VMs (CAS + 3 child primaries)
 
 .PARAMETER Location
@@ -22,8 +22,7 @@
     Which tier to deploy: 1, 2, or 3 (default: 3 = full lab).
 
 .PARAMETER ColocateSql
-    When specified, SQL is installed on the same VM as MCM (CAS/PrimA/PrimB).
-    Site 2 AOAG SQL nodes are always deployed as separate VMs.
+    When specified, SQL is installed on the same VM as MCM (CAS/PrimA/PrimB/PrimC).
 
 .PARAMETER SkipDomainJoin
     When specified, SQL and MCM VMs will NOT be domain-joined during deployment.
@@ -46,6 +45,22 @@
     Where to install Entra Connect:
       dedicated = New VM (default)
       dc02      = Install on DC02 (saves cost)
+
+.PARAMETER SizeDC
+    Optional VM size override for Domain Controllers. Defaults to the Bicep
+    template value when omitted. Use Get-VMSizeAvailability.ps1 to check a region.
+
+.PARAMETER SizeManagement
+    Optional VM size override for the Management / Entra Connect VMs.
+
+.PARAMETER SizeApp
+    Optional VM size override for MCM app servers (when SQL is not colocated).
+
+.PARAMETER SizeAppColocated
+    Optional VM size override for MCM app servers when SQL is colocated (-ColocateSql).
+
+.PARAMETER SizeSQL
+    Optional VM size override for the SQL Server VMs (CAS, PrimA, PrimB, PrimC).
 
 .PARAMETER WhatIf
     Preview changes without deploying (Azure What-If).
@@ -71,6 +86,10 @@
 .EXAMPLE
     # Preview what would be deployed (What-If)
     .\deploy.ps1 -Location eastus -BaseName azlab -WhatIf
+
+.EXAMPLE
+    # Override VM sizes at deploy time (unset sizes use Bicep defaults)
+    .\deploy.ps1 -Location eastus -BaseName azlab -SizeDC Standard_D2s_v6 -SizeSQL Standard_D4s_v6
 
 .EXAMPLE
     # Deploy to a specific subscription
@@ -118,6 +137,16 @@ param(
 
     [ValidateSet('Premium_LRS', 'StandardSSD_LRS', 'Standard_LRS')]
     [string]$OsDiskSku = 'Premium_LRS',
+
+    [string]$SizeDC,
+
+    [string]$SizeManagement,
+
+    [string]$SizeApp,
+
+    [string]$SizeAppColocated,
+
+    [string]$SizeSQL,
 
     [switch]$WhatIf,
 
@@ -856,8 +885,7 @@ $VmNames = [ordered]@{
     SqlCas   = "$BaseName-sqcs"
     SqlPrimA = "$BaseName-sqpa"
     SqlPrimB = "$BaseName-sqpb"
-    SqlAoag1 = "$BaseName-sqc1"
-    SqlAoag2 = "$BaseName-sqc2"
+    SqlPrimC = "$BaseName-sqpc"
     Cas      = "$BaseName-cas"
     PrimA    = "$BaseName-prma"
     PrimB    = "$BaseName-prmb"
@@ -875,17 +903,15 @@ if (-not $ColocateSqlBool) {
     Write-Host "   SQL (CAS)            Main       $($VmNames.SqlCas)" -ForegroundColor Gray
     Write-Host "   SQL (Primary A)      Main       $($VmNames.SqlPrimA)" -ForegroundColor Gray
     Write-Host "   SQL (Primary B)      Site 1     $($VmNames.SqlPrimB)" -ForegroundColor Gray
+    Write-Host "   SQL (Primary C)      Site 2     $($VmNames.SqlPrimC)" -ForegroundColor Gray
 }
-Write-Host "   SQL AOAG Node 1      Site 2     $($VmNames.SqlAoag1)" -ForegroundColor Gray
-Write-Host "   SQL AOAG Node 2      Site 2     $($VmNames.SqlAoag2)" -ForegroundColor Gray
 Write-Host "   MCM CAS              Main       $($VmNames.Cas)" -ForegroundColor Gray
 Write-Host "   MCM Primary A        Main       $($VmNames.PrimA)" -ForegroundColor Gray
 Write-Host "   MCM Primary B        Site 1     $($VmNames.PrimB)" -ForegroundColor Gray
 Write-Host "   MCM Primary C        Site 2     $($VmNames.PrimC)" -ForegroundColor Gray
 Write-Host "   ──────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
 if ($ColocateSqlBool) {
-    Write-Host "   ** SQL colocated on MCM servers (CAS/PrimA/PrimB). No separate SQL VMs." -ForegroundColor Yellow
-    Write-Host "      Site 2 AOAG SQL nodes are always deployed separately." -ForegroundColor Yellow
+    Write-Host "   ** SQL colocated on MCM servers (CAS/PrimA/PrimB/PrimC). No separate SQL VMs." -ForegroundColor Yellow
 }
 Write-Host ""
 Write-Host "   [1] Accept defaults" -ForegroundColor White
@@ -900,7 +926,7 @@ $namingChoice = Read-Host "   Select (default: 1)"
 if ($namingChoice -eq '3') {
     $ColocateSqlBool = -not $ColocateSqlBool
     if ($ColocateSqlBool) {
-        Write-Ok "SQL will be colocated on MCM servers (no separate SQL VMs for CAS/PrimA/PrimB)."
+        Write-Ok "SQL will be colocated on MCM servers (no separate SQL VMs for CAS/PrimA/PrimB/PrimC)."
     } else {
         Write-Ok "SQL will be on separate VMs."
     }
@@ -922,9 +948,8 @@ if ($namingChoice -eq '2') {
         $namePrompts['SqlCas']   = "SQL (CAS)        "
         $namePrompts['SqlPrimA'] = "SQL (Primary A)  "
         $namePrompts['SqlPrimB'] = "SQL (Primary B)  "
+        $namePrompts['SqlPrimC'] = "SQL (Primary C)  "
     }
-    $namePrompts['SqlAoag1'] = "SQL AOAG Node 1  "
-    $namePrompts['SqlAoag2'] = "SQL AOAG Node 2  "
     $namePrompts['Cas']      = "MCM CAS          "
     $namePrompts['PrimA']    = "MCM Primary A    "
     $namePrompts['PrimB']    = "MCM Primary B    "
@@ -948,10 +973,9 @@ if ($namingChoice -eq '2') {
 Write-Host ""
 Write-Host "   Final VM names:" -ForegroundColor Cyan
 if (-not $ColocateSqlBool) {
-    Write-Host "   SQL:  $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB), $($VmNames.SqlAoag1), $($VmNames.SqlAoag2)" -ForegroundColor Green
+    Write-Host "   SQL:  $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB), $($VmNames.SqlPrimC)" -ForegroundColor Green
 } else {
-    Write-Host "   SQL (AOAG only): $($VmNames.SqlAoag1), $($VmNames.SqlAoag2)" -ForegroundColor Green
-    Write-Host "   SQL colocated on: $($VmNames.Cas), $($VmNames.PrimA), $($VmNames.PrimB)" -ForegroundColor Green
+    Write-Host "   SQL colocated on: $($VmNames.Cas), $($VmNames.PrimA), $($VmNames.PrimB), $($VmNames.PrimC)" -ForegroundColor Green
 }
 Write-Host "   MCM: $($VmNames.Cas), $($VmNames.PrimA), $($VmNames.PrimB), $($VmNames.PrimC)" -ForegroundColor Green
 
@@ -1138,8 +1162,8 @@ $VpnRootCertData = $rootCertBase64
 # 4. Deploy
 # =============================================================================
 $tierDescription = switch ($DeploymentTier) {
-    1 { "Tier 1: Core Networking + AD (DCs, Bastion, File Share Witness)" }
-    2 { "Tier 2: + SQL Server VMs$(if($ColocateSqlBool){' (AOAG only — SQL colocated on MCM)'} else {' (5 VMs including AOAG at Site 2)'})" }
+    1 { "Tier 1: Core Networking + AD (DCs, Bastion)" }
+    2 { "Tier 2: + SQL Server VMs$(if($ColocateSqlBool){' (SQL colocated on MCM)'} else {' (4 VMs: CAS, PrimA, PrimB, PrimC)'})" }
     3 { "Tier 3: Full Lab (Core + SQL + MCM servers)" }
 }
 
@@ -1148,8 +1172,7 @@ $vmNameParams = @(
     "vmNameSqlCas=$($VmNames.SqlCas)"
     "vmNameSqlPrimA=$($VmNames.SqlPrimA)"
     "vmNameSqlPrimB=$($VmNames.SqlPrimB)"
-    "vmNameSqlAoag1=$($VmNames.SqlAoag1)"
-    "vmNameSqlAoag2=$($VmNames.SqlAoag2)"
+    "vmNameSqlPrimC=$($VmNames.SqlPrimC)"
     "vmNameCas=$($VmNames.Cas)"
     "vmNamePrimA=$($VmNames.PrimA)"
     "vmNamePrimB=$($VmNames.PrimB)"
@@ -1199,18 +1222,6 @@ function Find-LinkedPrivateDnsZone {
     return ''
 }
 
-# -- privatelink.file.core.windows.net (File Share Witness PE) --
-$existingFileDnsZoneId = ''
-Write-Step "Checking for existing privatelink.file.core.windows.net DNS zone linked to $labVnetName..."
-if (-not [string]::IsNullOrWhiteSpace($labVnetId)) {
-    $existingFileDnsZoneId = Find-LinkedPrivateDnsZone -ZoneName 'privatelink.file.core.windows.net' -VNetId $labVnetId
-}
-if (-not [string]::IsNullOrWhiteSpace($existingFileDnsZoneId)) {
-    Write-Ok "Found linked zone: $existingFileDnsZoneId"
-} else {
-    Write-Ok "No linked zone found — Bicep will create one"
-}
-
 # -- privatelink.vaultcore.azure.net (Key Vault PE) --
 $existingKvDnsZoneId = ''
 Write-Step "Checking for existing privatelink.vaultcore.azure.net DNS zone linked to $labVnetName..."
@@ -1222,6 +1233,15 @@ if (-not [string]::IsNullOrWhiteSpace($existingKvDnsZoneId)) {
 } else {
     Write-Ok "No linked zone found — Bicep will create one"
 }
+
+# Build optional VM size overrides — only pass sizes the user explicitly set,
+# so unspecified sizes fall back to the Bicep template defaults.
+$sizeParams = @()
+if (-not [string]::IsNullOrWhiteSpace($SizeDC))           { $sizeParams += "sizeDC=$SizeDC" }
+if (-not [string]::IsNullOrWhiteSpace($SizeManagement))   { $sizeParams += "sizeManagement=$SizeManagement" }
+if (-not [string]::IsNullOrWhiteSpace($SizeApp))          { $sizeParams += "sizeApp=$SizeApp" }
+if (-not [string]::IsNullOrWhiteSpace($SizeAppColocated)) { $sizeParams += "sizeAppColocated=$SizeAppColocated" }
+if (-not [string]::IsNullOrWhiteSpace($SizeSQL))          { $sizeParams += "sizeSQL=$SizeSQL" }
 
 # Build the complete --parameters array (each key=value as a separate element
 # so PowerShell passes them as individual arguments to az CLI).
@@ -1243,11 +1263,10 @@ $deployParams = @(
     "entraConnectPlacement=$EntraConnectPlacement"
     "imageSku=$SelectedImageSku"
     "osDiskSku=$OsDiskSku"
-    "existingFileDnsZoneId=$existingFileDnsZoneId"
     "existingKvDnsZoneId=$existingKvDnsZoneId"
     $colocateParam
     $joinDomainParam
-) + $vmNameParams
+) + $vmNameParams + $sizeParams
 
 Write-Header "Deployment Summary"
 Write-Host "  Base Name       : $BaseName" -ForegroundColor White
@@ -1263,7 +1282,7 @@ if ($EnableEntraBool) {
 }
 Write-Host "  VM Timezone     : $VmTimeZone" -ForegroundColor White
 Write-Host "  OS Image        : $SelectedImageSku" -ForegroundColor White
-Write-Host "  DNS Zone (file) : $(if ($existingFileDnsZoneId) {"Reusing: $existingFileDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
+Write-Host "  VM Sizes        : $(if ($sizeParams.Count -gt 0) { $sizeParams -join ', ' } else { 'Bicep defaults' })" -ForegroundColor White
 Write-Host "  DNS Zone (vault): $(if ($existingKvDnsZoneId) {"Reusing: $existingKvDnsZoneId"} else {'New (will be created by Bicep)'})" -ForegroundColor White
 Write-Host "  VPN Gateway     : P2S with self-signed certificate" -ForegroundColor White
 Write-Host "  Admin Password  : $(if ($IsIncremental) {'(reused from Key Vault)'} else {'(auto-generated, stored in Key Vault)'})" -ForegroundColor White
@@ -1343,9 +1362,8 @@ if ($VmTimeZone -ne 'UTC') {
             $vmTargets += @{ Name = $VmNames.SqlCas;  RG = "$BaseName-rg-main" }
             $vmTargets += @{ Name = $VmNames.SqlPrimA; RG = "$BaseName-rg-main" }
             $vmTargets += @{ Name = $VmNames.SqlPrimB; RG = "$BaseName-rg-site1" }
+            $vmTargets += @{ Name = $VmNames.SqlPrimC; RG = "$BaseName-rg-site2" }
         }
-        $vmTargets += @{ Name = $VmNames.SqlAoag1; RG = "$BaseName-rg-site2" }
-        $vmTargets += @{ Name = $VmNames.SqlAoag2; RG = "$BaseName-rg-site2" }
     }
     if ($DeploymentTier -ge 3) {
         $vmTargets += @{ Name = $VmNames.Cas;   RG = "$BaseName-rg-main" }
@@ -1427,7 +1445,7 @@ Write-Header "Deployment Complete!"
 Write-Host ""
 Write-Host "  Resource Groups created:" -ForegroundColor White
 Write-Host "    - $BaseName-rg-network    (VNet, NSGs, Bastion, VPN Gateway)" -ForegroundColor Gray
-Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault, File Share Witness)" -ForegroundColor Gray
+Write-Host "    - $BaseName-rg-identity   (DCs, Key Vault)" -ForegroundColor Gray
 if ($DeploymentTier -ge 2) {
     $mainContents = @()
     if (-not $ColocateSqlBool) { $mainContents += "$($VmNames.SqlCas)", "$($VmNames.SqlPrimA)" }
@@ -1435,7 +1453,8 @@ if ($DeploymentTier -ge 2) {
     $site1Contents = @()
     if (-not $ColocateSqlBool) { $site1Contents += "$($VmNames.SqlPrimB)" }
     if ($DeploymentTier -ge 3) { $site1Contents += "$($VmNames.PrimB)" }
-    $site2Contents = @("$($VmNames.SqlAoag1)", "$($VmNames.SqlAoag2)", 'ILB')
+    $site2Contents = @()
+    if (-not $ColocateSqlBool) { $site2Contents += "$($VmNames.SqlPrimC)" }
     if ($DeploymentTier -ge 3) { $site2Contents += "$($VmNames.PrimC)" }
 
     Write-Host "    - $BaseName-rg-main       ($($mainContents -join ', '))" -ForegroundColor Gray
@@ -1456,9 +1475,8 @@ if ($EnableEntraBool) {
 }
 if ($DeploymentTier -ge 2) {
     if (-not $ColocateSqlBool) {
-        Write-Host "    SQL      : $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB)" -ForegroundColor Gray
+        Write-Host "    SQL      : $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB), $($VmNames.SqlPrimC)" -ForegroundColor Gray
     }
-    Write-Host "    SQL AOAG : $($VmNames.SqlAoag1), $($VmNames.SqlAoag2)" -ForegroundColor Gray
 }
 if ($DeploymentTier -ge 3) {
     $mcmLabel = if ($ColocateSqlBool) { 'MCM+SQL' } else { 'MCM' }
@@ -1544,22 +1562,17 @@ if ($EnableEntraBool) {
 }
 if ($DeploymentTier -ge 2) {
     if ($ColocateSqlBool) {
-        Write-Host "  6) Install SQL Server on MCM VMs: $($VmNames.Cas), $($VmNames.PrimA), $($VmNames.PrimB)" -ForegroundColor White
+        Write-Host "  6) Install SQL Server on MCM VMs: $($VmNames.Cas), $($VmNames.PrimA), $($VmNames.PrimB), $($VmNames.PrimC)" -ForegroundColor White
     } else {
-        Write-Host "  6) Install SQL Server on: $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB)" -ForegroundColor White
+        Write-Host "  6) Install SQL Server on: $($VmNames.SqlCas), $($VmNames.SqlPrimA), $($VmNames.SqlPrimB), $($VmNames.SqlPrimC)" -ForegroundColor White
     }
-    Write-Host "  7) Install SQL Server on AOAG nodes: $($VmNames.SqlAoag1), $($VmNames.SqlAoag2)" -ForegroundColor White
-    Write-Host "  8) Register File Share Witness in AD (run separately after deployment):" -ForegroundColor White
-    Write-Host "       .\Register-WitnessStorage.ps1 -BaseName $BaseName" -ForegroundColor Cyan
-    Write-Host "     Then configure WSFC quorum + create AOAG on Site 2 SQL nodes" -ForegroundColor Gray
-    Write-Host "  9) Create AG Listener using ILB IP 10.0.40.10 (probe port 59999)" -ForegroundColor White
 }
 if ($DeploymentTier -ge 3) {
-    Write-Host " 10) Install MCM workloads on CAS and primary servers" -ForegroundColor White
+    Write-Host "  7) Install MCM workloads on CAS and primary servers" -ForegroundColor White
     Write-Host "     - $($VmNames.Cas): CAS (Main site)" -ForegroundColor Gray
     Write-Host "     - $($VmNames.PrimA): Child Primary A (Main site)" -ForegroundColor Gray
     Write-Host "     - $($VmNames.PrimB): Child Primary B (Site 1)" -ForegroundColor Gray
-    Write-Host "     - $($VmNames.PrimC): Child Primary C (Site 2, uses AOAG listener)" -ForegroundColor Gray
+    Write-Host "     - $($VmNames.PrimC): Child Primary C (Site 2)" -ForegroundColor Gray
 }
 Write-Host ""
 Write-Host "  To list deployed resources:" -ForegroundColor Gray

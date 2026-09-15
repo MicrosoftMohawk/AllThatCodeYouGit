@@ -328,6 +328,7 @@ Azure-Lab/
 ├── deploy-mgmt.ps1                        # Standalone: deploy management VM (Entra ID joined)
 ├── deploy-vm.ps1                          # Standalone: deploy a single VM into any lab subnet
 ├── Install-VpnCerts.ps1                   # Helper: install VPN certs on secondary machines
+├── Reset-VpnCerts.ps1                     # Helper: regenerate VPN certs + update gateway + Key Vault (works off-VPN)
 ├── Set-VpnDnsConfig.ps1                   # Helper: configure DNS NRPT rules for VPN private endpoint access
 ├── main.bicep                             # Subscription-scoped orchestrator (AD lab infrastructure)
 ├── mgmt.bicep                             # Resource-group-scoped: management VM + Entra ID join
@@ -355,7 +356,8 @@ Azure-Lab/
     │   └── storagePrivateEndpoint.bicep   # Reusable storage PE + private DNS zone (privatelink.file)
     ├── security/
     │   ├── keyVault.bicep                 # Key Vault (password storage + RBAC assignment)
-    │   └── keyVaultPrivateEndpoint.bicep   # Key Vault PE + private DNS zone
+    │   ├── keyVaultPrivateEndpoint.bicep   # Key Vault PE + private DNS zone
+    │   └── vpnCertSecrets.bicep           # Control-plane writer for VPN cert secrets (used by Reset-VpnCerts.ps1)
     └── identity/
         ├── promoteDC.bicep                # CSE: Promote DC01 as first DC (new forest)
         ├── configureAD.bicep              # RunCommand: OUs, groups, svc accounts, gMSA, AD Sites
@@ -561,6 +563,36 @@ To connect from a workstation that was **not** used to run `deploy.ps1`, use the
 This prompts for the PFX password (the admin password from Key Vault).
 
 > **Tip:** Re-running `deploy.ps1` with the same `-BaseName` reuses the certificates already in Key Vault, so the VPN gateway's root certificate is **not** rotated — previously-installed clients keep working, even when you re-run from a different machine.
+
+### 1c-2. Regenerating VPN Certificates (Reset-VpnCerts.ps1)
+
+If the VPN certificates are lost or corrupted and must be recreated from scratch, use `Reset-VpnCerts.ps1`. It regenerates the root + client certs, updates the VPN gateway's root certificate, and stores the new certs in Key Vault — **without touching the VMs**, and it **works even when you are not connected to the VPN** (all operations are Azure control-plane).
+
+```powershell
+# Preserve the existing admin password (prompts for it if it can't read Key Vault):
+.\Reset-VpnCerts.ps1 -BaseName azlab
+
+# Or rotate the admin password too (WARNING: desyncs from the VMs' local accounts):
+.\Reset-VpnCerts.ps1 -BaseName azlab -RotatePassword
+```
+
+- **Preserve mode (default):** the new PFX is encrypted with the current admin password, so it keeps matching the VMs and the `vm-admin-password` secret. Off-VPN you must supply/confirm that password (the private Key Vault can't be read).
+- **Rotating the root cert invalidates every installed client certificate.** After running this, re-run `Install-VpnCerts.ps1 -BaseName <name>` on each machine to pull the new certs from Key Vault. The gateway takes a few minutes to apply the new root cert.
+
+**Getting the new certs onto a machine that can't reach Key Vault (never on VPN):**
+Because the Key Vault is private (no public endpoint), a brand-new machine can't pull the certs directly. Produce portable files from a machine that has access, then import them offline:
+
+```powershell
+# On a machine with Key Vault access (e.g., the one running the reset):
+.\Reset-VpnCerts.ps1 -BaseName azlab -ExportDir C:\vpncerts
+# -> writes C:\vpncerts\P2SRootCert-azlab.cer and P2SClientCert-azlab.pfx
+
+# Copy that folder to the offline machine, then:
+.\Install-VpnCerts.ps1 -BaseName azlab -FromLocalFiles -CertDir C:\vpncerts
+# (enter the admin password when prompted — it's the PFX password)
+```
+
+Alternatively, briefly relax the Key Vault network policy to allow the machine's public IP, pull with `Install-VpnCerts.ps1 -BaseName azlab`, then re-lock it.
 
 ### 1d. VPN DNS Configuration (Private Endpoints)
 

@@ -302,7 +302,9 @@ $IsIncremental = $false
 $ExistingAdminPassword = ''
 $ExistingDomainName = ''
 
-if ($DeploymentTier -ge 2) {
+# Detect an existing environment (any tier) so re-runs reuse the existing admin
+# password instead of rotating it.
+if ($DeploymentTier -ge 2 -or (az group exists --name "$BaseName-rg-identity" 2>&1) -eq 'true') {
     Write-Step "Checking for existing Tier 1 deployment..."
     $rgIdentity = "$BaseName-rg-identity"
     $rgExists = az group exists --name $rgIdentity 2>&1
@@ -1025,6 +1027,53 @@ $ClientPfxPath = Join-Path $CertDir "P2SClientCert-$BaseName.pfx"
 $rootCertSubject  = "CN=P2SRootCert-$BaseName"
 $clientCertSubject = "CN=P2SClientCert-$BaseName"
 
+# KV-first reuse: if this environment already exists and its Key Vault is
+# reachable, reuse the certs already stored there.  This keeps the VPN gateway
+# root certificate stable when re-running from a different machine (generating
+# new certs would rotate the root and invalidate all installed client certs).
+$certsFromKv = $false
+if (-not (Test-Path $CertDir)) { New-Item -Path $CertDir -ItemType Directory -Force | Out-Null }
+$certRgIdentity = "$BaseName-rg-identity"
+if ((az group exists --name $certRgIdentity 2>&1) -eq 'true') {
+    $certKvName = az keyvault list --resource-group $certRgIdentity --query "[0].name" -o tsv 2>&1
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($certKvName)) {
+        $certKvName = $certKvName.Trim()
+        $kvRootData = az keyvault secret show --vault-name $certKvName --name vpn-root-cert --query value -o tsv 2>&1
+        $kvRootOk = ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($kvRootData))
+        $kvPfxData = az keyvault secret show --vault-name $certKvName --name vpn-client-cert-pfx --query value -o tsv 2>&1
+        $kvPfxOk = ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($kvPfxData))
+        if ($kvRootOk -and $kvPfxOk) {
+            Write-Ok "Reusing VPN certificates from Key Vault '$certKvName' (no root-cert rotation)."
+            $VpnRootCertData = $kvRootData.Trim()
+            $VpnClientCertData = $kvPfxData.Trim()
+
+            # Cache locally and import so this machine can use the VPN too.
+            [IO.File]::WriteAllBytes($ClientPfxPath, [Convert]::FromBase64String($VpnClientCertData))
+            $rootPemKv = "-----BEGIN CERTIFICATE-----`r`n$VpnRootCertData`r`n-----END CERTIFICATE-----"
+            Set-Content -Path $RootCertPath -Value $rootPemKv -Encoding Ascii
+            try {
+                $pfxPwdKv = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
+                Import-PfxCertificate -FilePath $ClientPfxPath -CertStoreLocation 'Cert:\CurrentUser\My' `
+                    -Password $pfxPwdKv -Exportable | Out-Null
+                $rootCertKv = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($RootCertPath)
+                $trustedStoreKv = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+                    [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+                    [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+                $trustedStoreKv.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                if (-not ($trustedStoreKv.Certificates | Where-Object { $_.Thumbprint -eq $rootCertKv.Thumbprint })) {
+                    $trustedStoreKv.Add($rootCertKv)
+                }
+                $trustedStoreKv.Close()
+                Write-Ok "VPN certificates imported from Key Vault into the local certificate stores."
+            } catch {
+                Write-Host "   WARNING: Could not import KV certs locally (PFX password may differ from current admin password): $_" -ForegroundColor Yellow
+            }
+            $certsFromKv = $true
+        }
+    }
+}
+
+if (-not $certsFromKv) {
 $rootCert = Get-ChildItem -Path 'Cert:\CurrentUser\My' |
     Where-Object { $_.Subject -eq $rootCertSubject } |
     Sort-Object NotAfter -Descending | Select-Object -First 1
@@ -1157,6 +1206,8 @@ if ($existingRoot) {
 $trustedStore.Close()
 
 $VpnRootCertData = $rootCertBase64
+$VpnClientCertData = [Convert]::ToBase64String([IO.File]::ReadAllBytes($ClientPfxPath))
+}
 
 # =============================================================================
 # 4. Deploy
@@ -1257,6 +1308,7 @@ $deployParams = @(
     "deployerObjectId=$DeployerObjectId"
     "kvPrincipalType=$KvPrincipalType"
     "vpnRootCertData=$VpnRootCertData"
+    "vpnClientCertData=$VpnClientCertData"
     "enableEntraIntegration=$($EnableEntraBool.ToString().ToLower())"
     "entraIdDomain=$EntraIdDomain"
     "domainStrategy=$DomainStrategy"

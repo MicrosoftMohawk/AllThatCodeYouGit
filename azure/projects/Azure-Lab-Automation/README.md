@@ -334,9 +334,9 @@ Azure-Lab/
 ├── bicepconfig.json                       # Bicep linter / analyzer config
 ├── Post-Deployment-DFSR-Validation.ps1    # Helper: validate DFSR/SYSVOL replication after DC promotion
 ├── main.json / mgmt.json                  # Compiled ARM templates (generated from the *.bicep files)
-├── certs/                                 # Auto-generated VPN certificates (per BaseName)
-│   ├── P2SRootCert-{base}.cer             # Root CA public key (re-exported every deploy)
-│   ├── P2SClientCert-{base}.pfx           # Client cert (re-exported with current admin password)
+├── certs/                                 # Local cache of VPN certs (git-ignored; authoritative copies live in Key Vault)
+│   ├── P2SRootCert-{base}.cer             # Root CA public key (cache)
+│   ├── P2SClientCert-{base}.pfx           # Client cert (cache; PFX password = admin password)
 │   └── vpn-client/                        # Downloaded VPN client config (from helper script)
 ├── scripts/
 │   └── Get-VMSizeAvailability.ps1         # Helper: check VM SKU availability in a region
@@ -442,6 +442,7 @@ Azure-Lab/
 | `snetSite2Prefix` | string | `10.0.40.0/24` | Site 2 subnet CIDR |
 | `snetGatewayPrefix` | string | `10.0.255.0/27` | GatewaySubnet CIDR for VPN Gateway |
 | `vpnRootCertData` | string | (auto-generated) | Base64 root cert public key for P2S VPN |
+| `vpnClientCertData` | securestring | (auto-generated) | Base64 client cert PFX, stored in Key Vault as `vpn-client-cert-pfx` |
 | `vpnClientAddressPrefix` | string | `172.16.0.0/24` | P2S VPN client address pool CIDR |
 | `deployerObjectId` | string | (prompted) | Entra ID object ID for Key Vault Administrator RBAC |
 | `kvPrincipalType` | string | `User` | Principal type for KV RBAC: `User` or `Group` |
@@ -530,30 +531,36 @@ The VPN Gateway takes **25–45 minutes** to provision after deployment starts.
 3. **Root cert**: Added to `CurrentUser\Trusted Root Certification Authorities` automatically
 4. **Connect**: Extract the downloaded ZIP, run the VPN client configuration, then connect via Windows VPN settings
 5. **VPN address**: Your workstation will receive a `172.16.0.x` IP with full access to the `10.0.0.0/16` lab network
-6. **Certificates stored locally**: `certs/P2SRootCert-{base}.cer` and `certs/P2SClientCert-{base}.pfx` (named per BaseName; PFX password = admin password from Key Vault)
+6. **Certificates stored centrally**: the root cert and client PFX are stored in the lab's Key Vault as the secrets `vpn-root-cert` and `vpn-client-cert-pfx` (PFX password = the `vm-admin-password` secret). A local copy is also cached in `certs/` but is git-ignored and non-authoritative.
 
 ### 1c. Connect via P2S VPN (Secondary Machine)
-To connect from a workstation that was **not** used to run `deploy.ps1`, use the helper script:
+To connect from a workstation that was **not** used to run `deploy.ps1`, use the helper script. It pulls the certificates **and** the PFX password straight from Key Vault — no need for an up-to-date repo copy:
 
-1. **Copy the `certs/` folder** from the original deployment machine to the secondary machine
+1. **Sign in to Azure** and ensure you can reach the lab's Key Vault (see note below):
+   ```powershell
+   az login
+   ```
 2. **Run the helper script**:
    ```powershell
    .\Install-VpnCerts.ps1 -BaseName azlab
    ```
 3. The script will:
+   - Discover the Key Vault in `{baseName}-rg-identity`
+   - Retrieve `vpn-root-cert`, `vpn-client-cert-pfx`, and `vm-admin-password`
    - Import the root CA into `CurrentUser\Trusted Root Certification Authorities`
-   - Import the client PFX into `CurrentUser\My` (prompts for the PFX password)
+   - Import the client PFX into `CurrentUser\My` (password applied automatically)
 4. **Download the VPN client configuration** manually from the Azure Portal:
    `{baseName}-vpngw` → Point-to-site configuration → Download VPN client
-5. **PFX password**: This is the admin password from Key Vault. The Key Vault name has a unique suffix, so look it up first, then read the secret:
-   ```bash
-   # Discover the Key Vault name (it has a unique suffix):
-   az keyvault list --resource-group {baseName}-rg-identity --query "[0].name" -o tsv
-   # Then retrieve the admin password from that vault:
-   az keyvault secret show --vault-name <keyvault-name> --name vm-admin-password --query value -o tsv
-   ```
 
-> **Tip:** You can connect multiple machines — just copy the `certs/` folder and run `Install-VpnCerts.ps1` on each one.
+> **Key Vault is private (Option B):** the vault has no public endpoint, so the machine running `Install-VpnCerts.ps1` must be able to reach it — on the VPN, on an allowlisted network, or run the script from a machine that already can. For a brand-new machine that isn't on the VPN yet, either run it from a machine already on the VPN, briefly relax the KV network policy, or use the offline fallback.
+
+**Offline fallback** (no Key Vault access): copy the `certs/` folder from a machine that has it and run:
+```powershell
+.\Install-VpnCerts.ps1 -BaseName azlab -FromLocalFiles -CertDir .\certs
+```
+This prompts for the PFX password (the admin password from Key Vault).
+
+> **Tip:** Re-running `deploy.ps1` with the same `-BaseName` reuses the certificates already in Key Vault, so the VPN gateway's root certificate is **not** rotated — previously-installed clients keep working, even when you re-run from a different machine.
 
 ### 1d. VPN DNS Configuration (Private Endpoints)
 

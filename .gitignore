@@ -3,3 +3,7 @@ ktfix*.ps1
 
 # AD diagnostic output
 adresult.json
+
+# P2S VPN certificate artifacts (authoritative copies live in the lab's Key Vault)
+azure/projects/Azure-Lab-Automation/certs/*.cer
+azure/projects/Azure-Lab-Automation/certs/*.pfx

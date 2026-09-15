@@ -30,6 +30,13 @@ param deployerObjectId string = ''
 @allowed(['User', 'Group'])
 param kvPrincipalType string = 'User'
 
+@description('Base64-encoded P2S VPN root certificate public key (stored for retrieval by other workstations)')
+param vpnRootCertData string = ''
+
+@description('Base64-encoded P2S VPN client certificate PFX (password is the admin password secret)')
+@secure()
+param vpnClientCertData string = ''
+
 // ---------------------------------------------------------------------------
 // Key Vault
 // ---------------------------------------------------------------------------
@@ -67,6 +74,35 @@ resource adminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   properties: {
     value: adminPassword
     contentType: 'text/plain'
+    attributes: {
+      enabled: true
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Secrets: P2S VPN certificates (authoritative store for all workstations)
+// ---------------------------------------------------------------------------
+resource vpnRootCertSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(vpnRootCertData)) {
+  parent: kv
+  name: 'vpn-root-cert'
+  tags: tags
+  properties: {
+    value: vpnRootCertData
+    contentType: 'text/plain'
+    attributes: {
+      enabled: true
+    }
+  }
+}
+
+resource vpnClientCertSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(vpnClientCertData)) {
+  parent: kv
+  name: 'vpn-client-cert-pfx'
+  tags: tags
+  properties: {
+    value: vpnClientCertData
+    contentType: 'application/x-pkcs12'
     attributes: {
       enabled: true
     }

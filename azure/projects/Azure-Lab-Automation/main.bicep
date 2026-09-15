@@ -119,6 +119,10 @@ param snetGatewayPrefix string = '10.0.255.0/27'
 @description('Base64-encoded root certificate public key for P2S VPN authentication')
 param vpnRootCertData string = ''
 
+@description('Base64-encoded P2S VPN client certificate PFX (stored in Key Vault for retrieval)')
+@secure()
+param vpnClientCertData string = ''
+
 @description('P2S VPN client address pool CIDR (must not overlap with VNet)')
 param vpnClientAddressPrefix string = '172.16.0.0/24'
 
@@ -377,6 +381,8 @@ module keyVault 'modules/security/keyVault.bicep' = {
     adminPassword: adminPassword
     deployerObjectId: deployerObjectId
     kvPrincipalType: kvPrincipalType
+    vpnRootCertData: vpnRootCertData
+    vpnClientCertData: vpnClientCertData
     tags: union(commonTags, { workload: 'secrets' })
   }
 }

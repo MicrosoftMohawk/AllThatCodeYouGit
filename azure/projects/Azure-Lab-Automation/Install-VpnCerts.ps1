@@ -133,6 +133,11 @@ try {
 Write-Warn "Download the VPN client configuration manually from the Azure Portal:"
 Write-Host "   Azure Portal -> $BaseName-vpngw -> Point-to-site configuration -> Download VPN client" -ForegroundColor Yellow
 
+# ─── Clean up any temp certs retrieved from Key Vault ────────────────────────
+if ($TempDir -and (Test-Path $TempDir)) {
+    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # ─── Summary ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
